@@ -20,12 +20,34 @@ export class Embedder {
   async load(model: string, onProgress?: ProgressCb): Promise<void> {
     this.loading = true;
     try {
-      const t = await import("@xenova/transformers");
-      t.env.allowLocalModels = false; // scarica da HF CDN, poi cache browser
-      t.env.useBrowserCache = true;
+      const mod: any = await import("@xenova/transformers");
+      // Interop CJS nel bundle: a volte gli export finiscono sotto `.default` → `t.env` undefined.
+      const T: any = mod && mod.env ? mod : (mod?.default ?? mod);
+      if (!T || !T.env || typeof T.pipeline !== "function") {
+        throw new Error("transformers.js non inizializzato correttamente (env/pipeline mancanti nel bundle)");
+      }
+
+      T.env.allowLocalModels = false; // scarica i modelli da HF CDN
+      T.env.useBrowserCache = true;
+      // I binari .wasm di onnxruntime NON sono nel bundle: senza wasmPaths, ort prova
+      // fileURLToPath(import.meta.url)=undefined → crash. Si puntano al CDN della versione
+      // corretta (onnxruntime-web 1.14.0) e si forza numThreads=1 (niente worker → niente
+      // risoluzione di path/import.meta nei thread).
+      try {
+        const wasm = T.env.backends?.onnx?.wasm;
+        if (wasm) {
+          wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/";
+          wasm.numThreads = 1;
+        } else {
+          ragLog.warn("embedder: T.env.backends.onnx.wasm non disponibile, uso i default");
+        }
+      } catch (e) {
+        ragLog.warn("embedder: impossibile configurare i wasmPaths ONNX", e);
+      }
+
       const build = (quantized: boolean) => {
         ragLog.info(`embedder: carico «${model}» (quantized=${quantized})`);
-        return t.pipeline("feature-extraction", model, { quantized, progress_callback: onProgress });
+        return T.pipeline("feature-extraction", model, { quantized, progress_callback: onProgress });
       };
       // Molti modelli (es. multilingual-e5-base) NON hanno la variante quantizzata su HF:
       // si prova quantized, e in caso di fallimento si ricade su full-precision.
