@@ -36,3 +36,30 @@
 .rag-card-body p:first-child {
   margin-top: 0;
 }
+.rag-log-details {
+  margin: 8px;
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: 6px;
+}
+.rag-log-details summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.rag-log {
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 6px;
+  margin-top: 6px;
+}
+textarea.rag-log {
+  width: 100%;
+  resize: vertical;
+}

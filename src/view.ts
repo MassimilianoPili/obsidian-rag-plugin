@@ -1,4 +1,5 @@
 import { Component, ItemView, MarkdownRenderer, TFile, WorkspaceLeaf } from "obsidian";
+import { ragLog } from "./logger";
 import type ObsidianRagPlugin from "./main";
 
 export const VIEW_TYPE_RAG = "obsidian-rag-view";
@@ -76,6 +77,19 @@ export class RagView extends ItemView {
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") run();
     });
+
+    // Pannello Log live: gli errori si vedono qui (oltre che in Impostazioni → Log).
+    const logDetails = root.createEl("details", { cls: "rag-log-details" });
+    logDetails.createEl("summary", { text: "Log / errori" });
+    const logPre = logDetails.createEl("pre", { cls: "rag-log" });
+    const renderLog = () => {
+      logPre.setText(ragLog.format());
+      logPre.scrollTop = logPre.scrollHeight;
+      refreshStatus();
+    };
+    renderLog();
+    this.register(ragLog.subscribe(renderLog)); // pulito automaticamente a onClose
+
     window.setTimeout(() => input.focus(), 0);
   }
 

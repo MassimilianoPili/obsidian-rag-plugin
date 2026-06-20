@@ -1,6 +1,7 @@
 import { App, Notice, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
 import { Embedder } from "./embedder";
 import { Indexer } from "./indexer";
+import { ragLog } from "./logger";
 import { RagServer } from "./server";
 import { HybridStore, SearchResult } from "./store";
 import { RagView, VIEW_TYPE_RAG } from "./view";
@@ -50,7 +51,16 @@ export default class ObsidianRagPlugin extends Plugin {
     this.addCommand({ id: "rag-open", name: "Apri pannello ricerca", callback: () => this.activateView() });
     this.addCommand({ id: "rag-reindex", name: "Reindicizza tutto il vault", callback: () => this.reindex(true) });
     this.addCommand({ id: "rag-test-model", name: "Testa modello embedding", callback: () => this.testModel() });
+    this.addCommand({
+      id: "rag-copy-log",
+      name: "Copia log negli appunti",
+      callback: async () => {
+        await navigator.clipboard.writeText(ragLog.format());
+        new Notice("RAG: log copiato negli appunti.");
+      },
+    });
     this.addSettingTab(new RagSettingTab(this.app, this));
+    ragLog.info("plugin caricato");
 
     // reindicizzazione incrementale sugli eventi del vault
     this.registerEvent(this.app.vault.on("modify", (f) => f instanceof TFile && this.indexer.reindexFile(f)));
@@ -96,11 +106,12 @@ export default class ObsidianRagPlugin extends Plugin {
         new Notice("RAG: indicizzo il vault…");
         await this.indexer.reindexAll(false);
       }
+      ragLog.info(`pronto · ${this.store.count()} chunk indicizzati`);
       new Notice(`RAG pronto · ${this.store.count()} chunk`);
       if (this.settings.enableServer) this.startServer();
     } catch (e) {
-      console.error("RAG init error", e);
-      new Notice("RAG: errore nel caricamento del modello (vedi console).");
+      ragLog.error("loadModelAndIndex", e);
+      new Notice("RAG: errore nel caricamento del modello — vedi la sezione «Log» nelle impostazioni.", 8000);
     }
   }
 
@@ -117,8 +128,8 @@ export default class ObsidianRagPlugin extends Plugin {
       this.server.start(this.settings.serverPort, this.settings.serverApiKey);
       new Notice(`RAG: server REST su 127.0.0.1:${this.settings.serverPort} (API key nelle impostazioni)`);
     } catch (e) {
-      console.error("RAG server", e);
-      new Notice("RAG: impossibile avviare il server (vedi console).");
+      ragLog.error("startServer", e);
+      new Notice("RAG: impossibile avviare il server — vedi «Log» nelle impostazioni.");
     }
   }
 
@@ -137,10 +148,11 @@ export default class ObsidianRagPlugin extends Plugin {
       const t0 = performance.now();
       const vec = await this.embedder.embedQuery("prova di funzionamento del modello");
       const ms = Math.round(performance.now() - t0);
+      ragLog.info(`test OK · ${short} · dim ${vec.length} · ${ms}ms`);
       new Notice(`RAG test OK · ${short} · dim ${vec.length} · ${ms}ms`, 8000);
     } catch (e) {
-      console.error("RAG test model", e);
-      new Notice(`RAG test: «${short}» NON funzionante (vedi console).`, 8000);
+      ragLog.error(`testModel «${short}»`, e);
+      new Notice(`RAG test: «${short}» NON funzionante — vedi «Log» nelle impostazioni.`, 8000);
     }
   }
 
@@ -203,8 +215,15 @@ export default class ObsidianRagPlugin extends Plugin {
 }
 
 class RagSettingTab extends PluginSettingTab {
+  private logUnsub: (() => void) | null = null;
+
   constructor(app: App, private plugin: ObsidianRagPlugin) {
     super(app, plugin);
+  }
+
+  hide(): void {
+    this.logUnsub?.();
+    this.logUnsub = null;
   }
 
   display(): void {
@@ -329,6 +348,38 @@ class RagSettingTab extends PluginSettingTab {
         t.setValue(this.plugin.settings.serverApiKey).onChange(async (v) => {
           this.plugin.settings.serverApiKey = v.trim();
           await this.plugin.saveSettings();
+        }),
+      );
+
+    // --- Log / Diagnostica: qui vedi gli errori senza aprire la devtools ---
+    containerEl.createEl("h3", { text: "Log / Diagnostica" });
+    const logBox = containerEl.createEl("textarea", { cls: "rag-log" });
+    logBox.readOnly = true;
+    logBox.rows = 14;
+    logBox.value = ragLog.format();
+    window.setTimeout(() => (logBox.scrollTop = logBox.scrollHeight), 0);
+    this.logUnsub?.();
+    this.logUnsub = ragLog.subscribe(() => {
+      logBox.value = ragLog.format();
+      logBox.scrollTop = logBox.scrollHeight;
+    });
+    new Setting(containerEl)
+      .addButton((b) =>
+        b.setButtonText("Aggiorna").onClick(() => {
+          logBox.value = ragLog.format();
+          logBox.scrollTop = logBox.scrollHeight;
+        }),
+      )
+      .addButton((b) =>
+        b.setButtonText("Copia").onClick(async () => {
+          await navigator.clipboard.writeText(ragLog.format());
+          new Notice("Log copiato.");
+        }),
+      )
+      .addButton((b) =>
+        b.setButtonText("Pulisci").onClick(() => {
+          ragLog.clear();
+          logBox.value = "";
         }),
       );
   }

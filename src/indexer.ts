@@ -3,6 +3,7 @@
 import { App, normalizePath, Plugin, TFile } from "obsidian";
 import { chunkMarkdown } from "./chunker";
 import { Embedder } from "./embedder";
+import { ragLog } from "./logger";
 import { HybridStore, StorePayload } from "./store";
 
 interface IndexData {
@@ -96,7 +97,11 @@ export class Indexer {
       const files = this.app.vault.getMarkdownFiles();
       let done = 0;
       for (const f of files) {
-        await this.indexOne(f);
+        try {
+          await this.indexOne(f);
+        } catch (e) {
+          ragLog.error(`indicizzazione fallita: ${f.path}`, e); // un file rotto non blocca il resto
+        }
         progress?.(++done, files.length);
       }
       const present = new Set(files.map((f) => f.path));
@@ -133,7 +138,10 @@ export class Indexer {
     const run = this.chain.then(fn, fn);
     this.chain = run.then(
       () => undefined,
-      () => undefined,
+      (err) => {
+        ragLog.error("task di indicizzazione", err);
+        return undefined;
+      },
     );
     return run;
   }
