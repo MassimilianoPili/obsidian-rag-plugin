@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-rag",
+  "name": "Obsidian RAG (hybrid)",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Ricerca ibrida locale sulle tue note: BM25 + semantica (embedding locale via transformers.js) + grafo dei link. Niente server, niente cloud.",
+  "author": "Massimiliano Pili",
+  "isDesktopOnly": true
+}

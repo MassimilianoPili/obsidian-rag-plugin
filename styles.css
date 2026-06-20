@@ -1,0 +1,38 @@
+.rag-view .rag-header {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+}
+.rag-input {
+  flex: 1;
+  min-width: 0;
+}
+.rag-status {
+  padding: 0 8px 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.rag-results {
+  padding: 0 8px 8px;
+}
+.rag-card {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+.rag-card-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.rag-card-path {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 12px;
+}
+.rag-card-body {
+  font-size: 13px;
+}
+.rag-card-body p:first-child {
+  margin-top: 0;
+}
