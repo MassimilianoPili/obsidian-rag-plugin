@@ -78,8 +78,16 @@ export default class ObsidianRagPlugin extends Plugin {
 
   startServer() {
     try {
+      if (!this.settings.serverApiKey) {
+        // Genera una API key di default: l'endpoint loopback serve dati privati, niente no-auth.
+        const c: any = (globalThis as any).crypto;
+        this.settings.serverApiKey = c?.randomUUID
+          ? c.randomUUID().replace(/-/g, "")
+          : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+        void this.saveSettings();
+      }
       this.server.start(this.settings.serverPort, this.settings.serverApiKey);
-      new Notice(`RAG: server REST su 127.0.0.1:${this.settings.serverPort}`);
+      new Notice(`RAG: server REST su 127.0.0.1:${this.settings.serverPort} (API key nelle impostazioni)`);
     } catch (e) {
       console.error("RAG server", e);
       new Notice("RAG: impossibile avviare il server (vedi console).");

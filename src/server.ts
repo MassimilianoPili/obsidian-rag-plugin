@@ -1,11 +1,30 @@
 // Server REST locale (127.0.0.1) dentro il plugin: stesso indice della UI, interrogabile
-// da Claude/CLI o da qualunque client OpenAI-compatible. Opt-in dalle impostazioni.
+// da Claude/CLI o da un client OpenAI-compatible. Opt-in dalle impostazioni.
+//
+// Sicurezza (server loopback con dati PRIVATI): NIENTE CORS (i chiamanti nativi non ne hanno
+// bisogno; abilitarlo permetterebbe a una pagina web di leggere le note); validazione dell'Host
+// header (anti DNS-rebinding); body cap + timeout; API key Bearer richiesta di default.
 import type ObsidianRagPlugin from "./main";
+
+const BODY_CAP = 1_000_000; // 1 MB
+const REQ_TIMEOUT_MS = 15_000;
 
 function readBody(req: any): Promise<any> {
   return new Promise((resolve) => {
     let d = "";
-    req.on("data", (c: any) => (d += c));
+    let total = 0;
+    req.on("data", (c: any) => {
+      total += c.length;
+      if (total > BODY_CAP) {
+        try {
+          req.destroy();
+        } catch {
+          /* ignore */
+        }
+        return resolve({});
+      }
+      d += c;
+    });
     req.on("end", () => {
       try {
         resolve(JSON.parse(d || "{}"));
@@ -34,24 +53,24 @@ export class RagServer {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const http = require("http");
     this.port = port;
+    const hostOk = new RegExp(`^(127\\.0\\.0\\.1|localhost|\\[::1\\]):${port}$`);
 
     this.server = http.createServer(async (req: any, res: any) => {
-      const cors = {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "authorization,content-type",
-        "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-      };
+      req.setTimeout(REQ_TIMEOUT_MS);
       const send = (code: number, obj: unknown) => {
-        res.writeHead(code, { "Content-Type": "application/json", ...cors });
+        // Nessun header CORS: il SOP del browser blocca la lettura cross-origin (voluto).
+        res.writeHead(code, { "Content-Type": "application/json" });
         res.end(JSON.stringify(obj));
       };
       try {
-        if (req.method === "OPTIONS") {
-          res.writeHead(204, cors);
-          return res.end();
+        // Anti DNS-rebinding: accetta solo Host loopback con la porta attesa.
+        if (!hostOk.test((req.headers["host"] || "").toString())) {
+          return send(403, { error: "forbidden host" });
         }
+
         const url = new URL(req.url, "http://localhost");
 
+        // Auth Bearer richiesta su tutto tranne /health.
         if (apiKey && url.pathname !== "/health") {
           if ((req.headers["authorization"] || "") !== `Bearer ${apiKey}`) {
             return send(401, { error: "unauthorized" });
@@ -75,6 +94,7 @@ export class RagServer {
         }
 
         if (url.pathname === "/v1/chat/completions" && req.method === "POST") {
+          if (Number(req.headers["content-length"]) > BODY_CAP) return send(413, { error: "payload too large" });
           const body = await readBody(req);
           const msgs: any[] = body.messages || [];
           const lastUser = [...msgs].reverse().find((m) => m.role === "user");

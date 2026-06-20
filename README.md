@@ -27,19 +27,23 @@ Poi: Obsidian → Impostazioni → *Community plugins* → attiva **Obsidian RAG
 
 ## Server REST per Claude / CLI (opt-in)
 
-Impostazioni del plugin → *Server REST locale* → **Abilita** (porta default `8765`, API key opzionale).
+Impostazioni del plugin → *Server REST locale* → **Abilita** (porta default `8765`). All'attivazione
+viene **generata una API key** (mostrata nelle impostazioni): `/search` e `/v1` la richiedono come Bearer.
 Con Obsidian aperto:
 
 ```bash
-curl 'http://127.0.0.1:8765/search?q=come%20faccio%20il%20backup&k=5'
+KEY=<la-tua-key-dalle-impostazioni>
 curl http://127.0.0.1:8765/health
+curl -H "Authorization: Bearer $KEY" 'http://127.0.0.1:8765/search?q=come%20faccio%20il%20backup&k=5'
 # OpenAI-compatible (solo estratti citati):
-curl -XPOST http://127.0.0.1:8765/v1/chat/completions -H 'content-type: application/json' \
+curl -XPOST http://127.0.0.1:8765/v1/chat/completions \
+  -H "Authorization: Bearer $KEY" -H 'content-type: application/json' \
   -d '{"model":"obsidian-rag","messages":[{"role":"user","content":"autenticazione SSO"}]}'
 ```
 
-Con API key: aggiungi `-H "Authorization: Bearer <key>"`. Claude Code può usarlo via `curl`,
-come tool REST, o avvolto in un piccolo MCP server. Endpoint legato a `127.0.0.1` (non esposto in rete).
+Claude Code lo usa via `curl`, come tool REST, o avvolto in un MCP. **Sicurezza**: legato a `127.0.0.1`,
+**niente CORS** (una pagina web non può leggere le note), Host header validato (anti DNS-rebinding),
+body cap 1 MB + timeout, Bearer obbligatorio.
 
 ## Impostazioni
 
