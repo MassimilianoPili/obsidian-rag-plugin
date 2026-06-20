@@ -1,7 +1,9 @@
 // Embedding ONNX in-process via transformers.js (@xenova/transformers).
-// Import dinamico: il modulo pesante si inizializza solo al primo load(), non all'avvio del plugin.
-// I modelli e5 richiedono i prefissi query:/passage!, gestiti qui.
-
+// Import STATICO nominale: l'import dinamico, una volta bundlato da esbuild (CJS interop),
+// restituiva un namespace senza `env`/`pipeline`. Con l'import nominale esbuild lega gli export
+// correttamente. Il costo è trascurabile: il modulo è comunque dentro main.js; il peso vero
+// (download del modello) resta lazy alla prima pipeline().
+import { env, pipeline } from "@xenova/transformers";
 import { ragLog } from "./logger";
 
 export type ProgressCb = (info: { status?: string; name?: string; file?: string; progress?: number }) => void;
@@ -20,26 +22,19 @@ export class Embedder {
   async load(model: string, onProgress?: ProgressCb): Promise<void> {
     this.loading = true;
     try {
-      const mod: any = await import("@xenova/transformers");
-      // Interop CJS nel bundle: a volte gli export finiscono sotto `.default` → `t.env` undefined.
-      const T: any = mod && mod.env ? mod : (mod?.default ?? mod);
-      if (!T || !T.env || typeof T.pipeline !== "function") {
-        throw new Error("transformers.js non inizializzato correttamente (env/pipeline mancanti nel bundle)");
-      }
-
-      T.env.allowLocalModels = false; // scarica i modelli da HF CDN
-      T.env.useBrowserCache = true;
+      env.allowLocalModels = false; // scarica i modelli da HF CDN
+      env.useBrowserCache = true;
       // I binari .wasm di onnxruntime NON sono nel bundle: senza wasmPaths, ort prova
       // fileURLToPath(import.meta.url)=undefined → crash. Si puntano al CDN della versione
       // corretta (onnxruntime-web 1.14.0) e si forza numThreads=1 (niente worker → niente
       // risoluzione di path/import.meta nei thread).
       try {
-        const wasm = T.env.backends?.onnx?.wasm;
+        const wasm = (env as any).backends?.onnx?.wasm;
         if (wasm) {
           wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/";
           wasm.numThreads = 1;
         } else {
-          ragLog.warn("embedder: T.env.backends.onnx.wasm non disponibile, uso i default");
+          ragLog.warn("embedder: env.backends.onnx.wasm non disponibile, uso i default");
         }
       } catch (e) {
         ragLog.warn("embedder: impossibile configurare i wasmPaths ONNX", e);
@@ -47,7 +42,7 @@ export class Embedder {
 
       const build = (quantized: boolean) => {
         ragLog.info(`embedder: carico «${model}» (quantized=${quantized})`);
-        return T.pipeline("feature-extraction", model, { quantized, progress_callback: onProgress });
+        return pipeline("feature-extraction", model, { quantized, progress_callback: onProgress });
       };
       // Molti modelli (es. multilingual-e5-base) NON hanno la variante quantizzata su HF:
       // si prova quantized, e in caso di fallimento si ricade su full-precision.
