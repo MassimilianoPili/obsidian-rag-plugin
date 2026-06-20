@@ -57,6 +57,7 @@ export default class ObsidianRagPlugin extends Plugin {
 
   onunload() {
     this.server.stop();
+    if (this.indexer) void this.indexer.flushPersist(); // salva una persist debounced pendente
   }
 
   private async init() {

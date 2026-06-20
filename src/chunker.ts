@@ -115,13 +115,58 @@ function mergeSmall(chunks: string[], target: number): string[] {
   return merged;
 }
 
+// Faccette del front-matter da iniettare nel testo indicizzato (entity-aware indexing).
+// Rende cercabili doc-type/verticale/tag e — per le note-entità SKOS — prefLabel/altLabel:
+// così una query "OP" trova la nota "Ordine di Pagamento" via i suoi sinonimi.
+const META_CTX_KEYS = ["doc-type", "tipo", "verticale", "layer", "tags"];
+
+function cleanScalar(v: string): string {
+  return v.replace(/^\s*\[/, "").replace(/\]\s*$/, "").replace(/"/g, "").trim();
+}
+
+function facetLine(meta: Record<string, string>): string {
+  const parts: string[] = [];
+  for (const k of META_CTX_KEYS) {
+    const v = meta[k];
+    if (v && cleanScalar(v)) parts.push(`[${k}: ${cleanScalar(v)}]`);
+  }
+  return parts.join(" ");
+}
+
+/** Chunk-identità: titolo + faccette + alias SKOS + scopeNote. null se non c'è metadata utile. */
+function identityCard(meta: Record<string, string>, fileName: string): string | null {
+  const bits: string[] = [];
+  const title = meta["prefLabel"] ? cleanScalar(meta["prefLabel"]) : fileName.replace(/\.md$/, "");
+  bits.push(title);
+  const fl = facetLine(meta);
+  if (fl) bits.push(fl);
+  const aliases = [meta["prefLabel"], meta["altLabel"], meta["hiddenLabel"]]
+    .filter(Boolean)
+    .map(cleanScalar)
+    .filter((s) => s.length > 0);
+  if (aliases.length) bits.push("Termini: " + aliases.join(", "));
+  if (meta["scopeNote"] && cleanScalar(meta["scopeNote"])) bits.push(cleanScalar(meta["scopeNote"]));
+  return bits.length > 1 ? bits.join("\n") : null; // solo se c'è più del titolo
+}
+
 export function chunkMarkdown(text: string, fileName: string): Chunk[] {
-  const { body } = parseFrontmatter(text);
+  const { meta, body } = parseFrontmatter(text);
   const chunks: Chunk[] = [];
   let idx = 0;
+  const facets = facetLine(meta);
+
+  // 1) chunk-identità (entity-aware): rende l'header semantico + gli alias cercabili
+  const card = identityCard(meta, fileName);
+  if (card) {
+    chunks.push({ content: `[File: ${fileName}]\n${card}`, heading: "", headerPath: "", chunkIndex: idx });
+    idx++;
+  }
+
+  // 2) chunk di contenuto, con faccette nel prefisso
   for (const { headerPath, heading, text: secText } of splitSections(body)) {
     let prefix = `[File: ${fileName}]`;
     if (headerPath) prefix += ` [Sezione: ${headerPath}]`;
+    if (facets) prefix += ` ${facets}`;
     prefix += "\n";
     const avail = Math.max(200, MAX_CHARS - prefix.length);
     const pieces = mergeSmall(recursiveSplit(secText, avail), Math.max(200, TARGET_CHARS - prefix.length));

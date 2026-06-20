@@ -92,6 +92,7 @@ export class HybridStore {
     k: number,
     neighborsOf: (files: string[]) => Set<string>,
     graphBoost = 1.12,
+    mmrLambda = 0.7,
   ): Promise<SearchResult[]> {
     if (!this.db) return [];
     const scores = new Map<string, number>();
@@ -128,20 +129,60 @@ export class HybridStore {
       if (f && nb.has(f)) scores.set(id, s * graphBoost);
     }
 
-    return [...scores.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, k)
-      .map(([id, score]) => {
-        const d = meta.get(id);
-        return {
-          id,
-          score: Number(score.toFixed(6)),
-          sourceFile: d.sourceFile,
-          heading: d.heading,
-          headerPath: d.headerPath,
-          content: d.content,
-        };
-      });
+    // Rerank MMR: bilancia rilevanza (score fuso) e diversità (sim coseno tra chunk),
+    // così i top-K non sono 3 chunk quasi-identici della stessa nota. Embedding già normalizzati → dot = coseno.
+    const dot = (a: number[], b: number[]) => {
+      let s = 0;
+      const n = Math.min(a.length, b.length);
+      for (let i = 0; i < n; i++) s += a[i] * b[i];
+      return s;
+    };
+    const ranked = [...scores.entries()].sort((a, b) => b[1] - a[1]);
+    const pool = ranked.slice(0, Math.max(k * 3, 30)).map(([id, s]) => ({
+      id,
+      rel0: s,
+      emb: meta.get(id)?.embedding as number[] | undefined,
+    }));
+    const maxRel = pool.length ? pool[0].rel0 : 1;
+    const lambda = mmrLambda >= 1 ? 1 : mmrLambda; // 1 = disattiva diversità
+    const selected: { id: string; rel0: number; emb?: number[] }[] = [];
+    while (selected.length < k && pool.length) {
+      let bestIdx = -1;
+      let bestMmr = -Infinity;
+      for (let i = 0; i < pool.length; i++) {
+        const c = pool[i];
+        const rel = maxRel > 0 ? c.rel0 / maxRel : 0;
+        let div = 0;
+        if (c.emb && lambda < 1) {
+          for (const sdoc of selected) {
+            if (sdoc.emb) {
+              const sim = dot(c.emb, sdoc.emb);
+              if (sim > div) div = sim;
+            }
+          }
+        }
+        const mmr = lambda * rel - (1 - lambda) * div;
+        if (mmr > bestMmr) {
+          bestMmr = mmr;
+          bestIdx = i;
+        }
+      }
+      if (bestIdx < 0) break;
+      selected.push(pool[bestIdx]);
+      pool.splice(bestIdx, 1);
+    }
+
+    return selected.map(({ id, rel0 }) => {
+      const d = meta.get(id);
+      return {
+        id,
+        score: Number(rel0.toFixed(6)),
+        sourceFile: d.sourceFile,
+        heading: d.heading,
+        headerPath: d.headerPath,
+        content: d.content,
+      };
+    });
   }
 
   async serialize(): Promise<StorePayload> {

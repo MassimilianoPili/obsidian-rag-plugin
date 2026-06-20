@@ -24,6 +24,11 @@ export class Indexer {
   private adj = new Map<string, Set<string>>();
   private hashes: Record<string, string> = {};
   indexing = false;
+  // Serializzazione mutazioni: ogni write all'indice passa per questa catena (no race su index.json).
+  private chain: Promise<void> = Promise.resolve();
+  // Persist debounced: coalesce le scritture in burst di edit.
+  private persistTimer: number | null = null;
+  private dirty = false;
 
   constructor(
     private app: App,
@@ -79,6 +84,12 @@ export class Indexer {
   async reindexAll(force: boolean, progress?: (done: number, total: number) => void) {
     if (this.indexing) return;
     this.indexing = true;
+    // annulla una persist debounced pendente: il loop sotto muta lo store fuori dalla catena
+    if (this.persistTimer !== null) {
+      window.clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    this.dirty = false;
     try {
       if (force) this.hashes = {};
       this.buildGraph();
@@ -103,23 +114,78 @@ export class Indexer {
 
   async reindexFile(f: TFile) {
     if (f.extension !== "md" || this.indexing) return;
-    this.buildGraph();
-    if (await this.indexOne(f)) await this.persist();
+    await this.enqueue(async () => {
+      this.buildGraph();
+      if (await this.indexOne(f)) this.schedulePersist();
+    });
   }
 
   async removeFile(path: string) {
-    await this.store.removeFile(path);
-    delete this.hashes[path];
-    await this.persist();
+    await this.enqueue(async () => {
+      await this.store.removeFile(path);
+      delete this.hashes[path];
+      this.schedulePersist();
+    });
   }
 
+  /** Accoda una mutazione: garantisce che non girino due write concorrenti sull'indice. */
+  private enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.chain.then(fn, fn);
+    this.chain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  /** Persist immediato (usato a fine reindexAll e onunload). */
   async persist() {
+    this.dirty = false;
+    if (this.persistTimer !== null) {
+      window.clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    await this.enqueue(() => this.writeIndex());
+  }
+
+  /** Persist debounced: scrive ~1.5s dopo l'ultimo edit di un burst. */
+  private schedulePersist() {
+    this.dirty = true;
+    if (this.persistTimer !== null) window.clearTimeout(this.persistTimer);
+    this.persistTimer = window.setTimeout(() => {
+      this.persistTimer = null;
+      if (this.dirty) void this.persist();
+    }, 1500);
+  }
+
+  /** Flush di una persist pendente (da chiamare in onunload). */
+  async flushPersist() {
+    if (this.dirty || this.persistTimer !== null) await this.persist();
+  }
+
+  /** Scrittura atomica: tmp + rename (con fallback a scrittura diretta). */
+  private async writeIndex() {
     const data: IndexData = {
       model: this.embedder.model,
       hashes: this.hashes,
       store: await this.store.serialize(),
     };
-    await this.app.vault.adapter.write(this.dataPath(), JSON.stringify(data));
+    const json = JSON.stringify(data);
+    const adapter = this.app.vault.adapter;
+    const path = this.dataPath();
+    const tmp = path + ".tmp";
+    try {
+      await adapter.write(tmp, json);
+      if (await adapter.exists(path)) await adapter.remove(path);
+      await adapter.rename(tmp, path);
+    } catch {
+      await adapter.write(path, json); // fallback non-atomico
+      try {
+        if (await adapter.exists(tmp)) await adapter.remove(tmp);
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   /** Carica un indice persistito se compatibile col modello/dim correnti. */
