@@ -7,6 +7,7 @@ import { RagView, VIEW_TYPE_RAG } from "./view";
 
 export interface RagSettings {
   embedModel: string;
+  modelConfirmed: boolean; // il modello si scarica/carica solo dopo conferma esplicita dell'utente
   topK: number;
   graphBoost: number;
   enableServer: boolean;
@@ -14,8 +15,18 @@ export interface RagSettings {
   serverApiKey: string;
 }
 
+// Modelli suggeriti per la tendina (dim e size indicative). "custom" per HF id arbitrario.
+export const SUGGESTED_MODELS: { id: string; label: string }[] = [
+  { id: "Xenova/multilingual-e5-small", label: "multilingual-e5-small · 384d · ~120MB · IT, leggero (consigliato)" },
+  { id: "Xenova/multilingual-e5-base", label: "multilingual-e5-base · 768d · ~280MB · IT, qualità superiore" },
+  { id: "Xenova/paraphrase-multilingual-MiniLM-L12-v2", label: "paraphrase-multilingual-MiniLM-L12 · 384d · IT/multi" },
+  { id: "Xenova/bge-small-en-v1.5", label: "bge-small-en-v1.5 · 384d · solo EN" },
+  { id: "Xenova/all-MiniLM-L6-v2", label: "all-MiniLM-L6-v2 · 384d · EN, generico" },
+];
+
 export const DEFAULT_SETTINGS: RagSettings = {
-  embedModel: "Xenova/multilingual-e5-small", // multilingua leggero, adatto a note italiane
+  embedModel: "Xenova/multilingual-e5-small", // pre-selezionato nella tendina, NON scaricato finché non confermi
+  modelConfirmed: false,
   topK: 6,
   graphBoost: 1.12,
   enableServer: false, // opt-in: server REST locale per Claude/CLI
@@ -38,6 +49,7 @@ export default class ObsidianRagPlugin extends Plugin {
     this.addRibbonIcon("search", "Obsidian RAG", () => this.activateView());
     this.addCommand({ id: "rag-open", name: "Apri pannello ricerca", callback: () => this.activateView() });
     this.addCommand({ id: "rag-reindex", name: "Reindicizza tutto il vault", callback: () => this.reindex(true) });
+    this.addCommand({ id: "rag-test-model", name: "Testa modello embedding", callback: () => this.testModel() });
     this.addSettingTab(new RagSettingTab(this.app, this));
 
     // reindicizzazione incrementale sugli eventi del vault
@@ -61,19 +73,34 @@ export default class ObsidianRagPlugin extends Plugin {
   }
 
   private async init() {
+    // Nessun download automatico: il modello si carica solo dopo scelta esplicita dell'utente.
+    if (!this.settings.modelConfirmed) {
+      new Notice("RAG: scegli il modello nelle impostazioni del plugin e premi «Carica modello».", 8000);
+      return;
+    }
+    await this.loadModelAndIndex();
+  }
+
+  /** Scarica/attiva il modello selezionato e (re)indicizza. Invocato dal bottone o all'avvio se già confermato. */
+  async loadModelAndIndex() {
+    if (this.embedder.loading) {
+      new Notice("RAG: caricamento del modello già in corso…");
+      return;
+    }
     try {
-      new Notice("RAG: carico il modello…");
+      const short = this.settings.embedModel.split("/").pop();
+      new Notice(`RAG: carico «${short}» (download dal CDN al primo uso)…`, 6000);
       await this.embedder.load(this.settings.embedModel);
       const loaded = await this.indexer.tryLoad(this.embedder.model, this.embedder.dim);
       if (!loaded) {
-        new Notice("RAG: indicizzo il vault (prima volta)…");
+        new Notice("RAG: indicizzo il vault…");
         await this.indexer.reindexAll(false);
       }
       new Notice(`RAG pronto · ${this.store.count()} chunk`);
       if (this.settings.enableServer) this.startServer();
     } catch (e) {
       console.error("RAG init error", e);
-      new Notice("RAG: errore in inizializzazione (vedi console).");
+      new Notice("RAG: errore nel caricamento del modello (vedi console).");
     }
   }
 
@@ -92,6 +119,28 @@ export default class ObsidianRagPlugin extends Plugin {
     } catch (e) {
       console.error("RAG server", e);
       new Notice("RAG: impossibile avviare il server (vedi console).");
+    }
+  }
+
+  /** Verifica rapida del modello selezionato: lo carica se serve ed esegue un embedding di prova (no reindex). */
+  async testModel() {
+    if (this.embedder.loading) {
+      new Notice("RAG: caricamento del modello già in corso…");
+      return;
+    }
+    const short = this.settings.embedModel.split("/").pop();
+    try {
+      if (!this.embedder.ready || this.embedder.model !== this.settings.embedModel) {
+        new Notice(`RAG test: carico «${short}» (download al primo uso)…`, 6000);
+        await this.embedder.load(this.settings.embedModel);
+      }
+      const t0 = performance.now();
+      const vec = await this.embedder.embedQuery("prova di funzionamento del modello");
+      const ms = Math.round(performance.now() - t0);
+      new Notice(`RAG test OK · ${short} · dim ${vec.length} · ${ms}ms`, 8000);
+    } catch (e) {
+      console.error("RAG test model", e);
+      new Notice(`RAG test: «${short}» NON funzionante (vedi console).`, 8000);
     }
   }
 
@@ -163,14 +212,71 @@ class RagSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.createEl("h3", { text: "Obsidian RAG — ricerca ibrida locale" });
 
+    const isSuggested = SUGGESTED_MODELS.some((m) => m.id === this.plugin.settings.embedModel);
+    let customRow: Setting | null = null;
+
     new Setting(containerEl)
       .setName("Modello embedding")
-      .setDesc("Modello transformers.js (ONNX). Cambiarlo richiede un reindex (dim diversa).")
+      .setDesc("Scegli un modello (multilingua per note italiane). Il download parte SOLO con «Carica modello», non in automatico.")
+      .addDropdown((d) => {
+        for (const m of SUGGESTED_MODELS) d.addOption(m.id, m.label);
+        d.addOption("__custom__", "Custom (HF id)…");
+        d.setValue(isSuggested ? this.plugin.settings.embedModel : "__custom__");
+        d.onChange(async (v) => {
+          if (v === "__custom__") {
+            customRow?.settingEl.show();
+          } else {
+            this.plugin.settings.embedModel = v;
+            await this.plugin.saveSettings();
+            customRow?.settingEl.hide();
+          }
+        });
+      });
+
+    customRow = new Setting(containerEl)
+      .setName("Modello custom")
+      .setDesc("Identificatore Hugging Face, es. Xenova/multilingual-e5-base")
       .addText((t) =>
-        t.setValue(this.plugin.settings.embedModel).onChange(async (v) => {
+        t.setValue(isSuggested ? "" : this.plugin.settings.embedModel).onChange(async (v) => {
           this.plugin.settings.embedModel = v.trim();
           await this.plugin.saveSettings();
         }),
+      );
+    if (isSuggested) customRow.settingEl.hide();
+
+    new Setting(containerEl)
+      .setName("Carica modello")
+      .setDesc("Scarica (se serve) e attiva il modello selezionato, poi indicizza. Dopo aver cambiato modello, premi di nuovo per applicare (reindex).")
+      .addButton((b) =>
+        b
+          .setButtonText(this.plugin.embedder.ready ? "Ricarica / cambia modello" : "Carica modello")
+          .setCta()
+          .onClick(async () => {
+            this.plugin.settings.modelConfirmed = true;
+            await this.plugin.saveSettings();
+            await this.plugin.loadModelAndIndex();
+            this.display(); // refresh stato
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Testa modello")
+      .setDesc("Carica (se serve) il modello selezionato ed esegue un embedding di prova: verifica che scarichi e funzioni, senza reindicizzare.")
+      .addButton((b) =>
+        b.setButtonText("Testa").onClick(async () => {
+          await this.plugin.testModel();
+          this.display(); // refresh stato
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Stato modello")
+      .setDesc(
+        this.plugin.embedder.loading
+          ? "Caricamento in corso…"
+          : this.plugin.embedder.ready
+            ? `Pronto · ${this.plugin.embedder.model} · ${this.plugin.store.count()} chunk`
+            : "Non caricato — scegli un modello e premi «Carica modello».",
       );
 
     new Setting(containerEl)

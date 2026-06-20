@@ -7,6 +7,7 @@ export type ProgressCb = (info: { status?: string; name?: string; file?: string;
 export class Embedder {
   model = "";
   dim = 0;
+  loading = false; // true durante il download/init del modello (per evitare load concorrenti)
   private extractor: any = null;
   private isE5 = false;
 
@@ -15,16 +16,21 @@ export class Embedder {
   }
 
   async load(model: string, onProgress?: ProgressCb): Promise<void> {
-    const t = await import("@xenova/transformers");
-    t.env.allowLocalModels = false; // scarica da HF CDN, poi cache browser
-    t.env.useBrowserCache = true;
-    this.extractor = await t.pipeline("feature-extraction", model, {
-      quantized: true, // ONNX quantizzato: più leggero/veloce su CPU
-      progress_callback: onProgress,
-    });
-    this.model = model;
-    this.isE5 = /e5/i.test(model);
-    this.dim = (await this.embedRaw(["probe"]))[0].length;
+    this.loading = true;
+    try {
+      const t = await import("@xenova/transformers");
+      t.env.allowLocalModels = false; // scarica da HF CDN, poi cache browser
+      t.env.useBrowserCache = true;
+      this.extractor = await t.pipeline("feature-extraction", model, {
+        quantized: true, // ONNX quantizzato: più leggero/veloce su CPU
+        progress_callback: onProgress,
+      });
+      this.model = model;
+      this.isE5 = /e5/i.test(model);
+      this.dim = (await this.embedRaw(["probe"]))[0].length;
+    } finally {
+      this.loading = false;
+    }
   }
 
   private async embedRaw(texts: string[]): Promise<number[][]> {

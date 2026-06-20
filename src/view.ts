@@ -26,17 +26,29 @@ export class RagView extends ItemView {
     const header = root.createDiv({ cls: "rag-header" });
     const input = header.createEl("input", { type: "text", cls: "rag-input", placeholder: "Cerca nelle note…" });
     const btn = header.createEl("button", { text: "Cerca", cls: "rag-btn" });
-    const status = root.createDiv({ cls: "rag-status", text: this.plugin.modeText() });
+    const status = root.createDiv({ cls: "rag-status" });
     const results = root.createDiv({ cls: "rag-results" });
+
+    const refreshStatus = () => {
+      if (this.plugin.embedder.loading) status.setText("⏳ Modello in caricamento…");
+      else if (!this.plugin.embedder.ready)
+        status.setText("⚠ Modello non caricato — Impostazioni → «Carica modello».");
+      else status.setText(this.plugin.modeText());
+    };
+    refreshStatus();
 
     const run = async () => {
       const q = input.value.trim();
       if (!q) return;
+      if (!this.plugin.embedder.ready) {
+        status.setText("⚠ Modello non caricato — caricalo dalle Impostazioni prima di cercare.");
+        return;
+      }
       results.empty();
       status.setText("cerco…");
       const hits = await this.plugin.search(q);
       if (hits === null) {
-        status.setText("Indice non ancora pronto (modello in caricamento).");
+        status.setText("Indice non pronto. Carica il modello dalle Impostazioni o riprova tra poco.");
         return;
       }
       status.setText(`${hits.length} risultati · ${this.plugin.modeText()}`);

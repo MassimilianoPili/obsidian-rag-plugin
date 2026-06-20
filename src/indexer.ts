@@ -82,7 +82,7 @@ export class Indexer {
   }
 
   async reindexAll(force: boolean, progress?: (done: number, total: number) => void) {
-    if (this.indexing) return;
+    if (this.indexing || !this.embedder.ready) return;
     this.indexing = true;
     // annulla una persist debounced pendente: il loop sotto muta lo store fuori dalla catena
     if (this.persistTimer !== null) {
@@ -113,7 +113,7 @@ export class Indexer {
   }
 
   async reindexFile(f: TFile) {
-    if (f.extension !== "md" || this.indexing) return;
+    if (f.extension !== "md" || this.indexing || !this.embedder.ready) return;
     await this.enqueue(async () => {
       this.buildGraph();
       if (await this.indexOne(f)) this.schedulePersist();
