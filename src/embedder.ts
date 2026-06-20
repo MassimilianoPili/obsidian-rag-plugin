@@ -1,9 +1,7 @@
 // Embedding ONNX in-process via transformers.js (@xenova/transformers).
-// Import STATICO nominale: l'import dinamico, una volta bundlato da esbuild (CJS interop),
-// restituiva un namespace senza `env`/`pipeline`. Con l'import nominale esbuild lega gli export
-// correttamente. Il costo è trascurabile: il modulo è comunque dentro main.js; il peso vero
-// (download del modello) resta lazy alla prima pipeline().
-import { env, pipeline } from "@xenova/transformers";
+// Import DINAMICO dentro load(): l'import statico fa valutare transformers all'avvio del plugin,
+// e il suo top-level crasha nel bundle Electron → il plugin non si carica più. Col dinamico il
+// plugin si carica sempre e un eventuale errore resta confinato a load() (e finisce nel Log).
 import { ragLog } from "./logger";
 
 export type ProgressCb = (info: { status?: string; name?: string; file?: string; progress?: number }) => void;
@@ -22,34 +20,48 @@ export class Embedder {
   async load(model: string, onProgress?: ProgressCb): Promise<void> {
     this.loading = true;
     try {
-      env.allowLocalModels = false; // scarica i modelli da HF CDN
-      env.useBrowserCache = true;
-      // I binari .wasm di onnxruntime NON sono nel bundle: senza wasmPaths, ort prova
-      // fileURLToPath(import.meta.url)=undefined → crash. Si puntano al CDN della versione
-      // corretta (onnxruntime-web 1.14.0) e si forza numThreads=1 (niente worker → niente
-      // risoluzione di path/import.meta nei thread).
-      try {
-        const wasm = (env as any).backends?.onnx?.wasm;
-        if (wasm) {
-          wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/";
-          wasm.numThreads = 1;
-        } else {
-          ragLog.warn("embedder: env.backends.onnx.wasm non disponibile, uso i default");
+      const mod: any = await import("@xenova/transformers");
+      // Diagnostica: logghiamo la forma reale degli export, così l'interop non è più a indovinare.
+      ragLog.info(
+        `transformers export: [${Object.keys(mod || {}).join(",")}] · default:[${Object.keys(mod?.default || {}).join(",")}]`,
+      );
+      // pipeline può stare sul namespace o sotto .default (interop CJS del bundle).
+      const lib: any =
+        typeof mod?.pipeline === "function"
+          ? mod
+          : typeof mod?.default?.pipeline === "function"
+            ? mod.default
+            : null;
+      if (!lib) throw new Error("transformers.js: funzione pipeline() non trovata negli export");
+
+      const e: any = lib.env ?? mod?.env ?? mod?.default?.env;
+      if (e) {
+        e.allowLocalModels = false; // scarica i modelli da HF CDN
+        e.useBrowserCache = true;
+        // I .wasm di onnxruntime NON sono nel bundle: senza wasmPaths ort prova
+        // fileURLToPath(import.meta.url)=undefined → crash. CDN versione 1.14.0 + numThreads=1.
+        try {
+          const wasm = e.backends?.onnx?.wasm;
+          if (wasm) {
+            wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/";
+            wasm.numThreads = 1;
+          }
+        } catch (err) {
+          ragLog.warn("embedder: configurazione wasm ONNX fallita", err);
         }
-      } catch (e) {
-        ragLog.warn("embedder: impossibile configurare i wasmPaths ONNX", e);
+      } else {
+        ragLog.warn("embedder: transformers.env non disponibile — uso i default (wasm non configurato)");
       }
 
       const build = (quantized: boolean) => {
         ragLog.info(`embedder: carico «${model}» (quantized=${quantized})`);
-        return pipeline("feature-extraction", model, { quantized, progress_callback: onProgress });
+        return lib.pipeline("feature-extraction", model, { quantized, progress_callback: onProgress });
       };
-      // Molti modelli (es. multilingual-e5-base) NON hanno la variante quantizzata su HF:
-      // si prova quantized, e in caso di fallimento si ricade su full-precision.
+      // Fallback quantized → full-precision per i modelli senza variante quantizzata.
       try {
         this.extractor = await build(true);
-      } catch (e) {
-        ragLog.warn(`embedder: variante quantizzata non disponibile per «${model}», riprovo full-precision`, e);
+      } catch (err) {
+        ragLog.warn(`embedder: quantizzata non disponibile per «${model}», riprovo full-precision`, err);
         this.extractor = await build(false);
       }
       this.model = model;
