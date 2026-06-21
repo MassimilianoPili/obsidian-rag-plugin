@@ -10,6 +10,7 @@ export interface RagSettings {
   embedModel: string;
   modelConfirmed: boolean; // il modello si scarica/carica solo dopo conferma esplicita dell'utente
   autoLoadOnStartup: boolean; // se true carica modello+indice all'avvio (può rallentare Obsidian)
+  indexThrottleMs: number; // pausa tra un file e l'altro in indicizzazione (anti-saturazione CPU)
   topK: number;
   graphBoost: number;
   enableServer: boolean;
@@ -30,6 +31,7 @@ export const DEFAULT_SETTINGS: RagSettings = {
   embedModel: "Xenova/multilingual-e5-small", // pre-selezionato nella tendina, NON scaricato finché non confermi
   modelConfirmed: false,
   autoLoadOnStartup: false, // default: nessun caricamento all'avvio → apertura Obsidian leggera
+  indexThrottleMs: 15, // piccola pausa per-file: tiene la UI fluida durante l'indicizzazione
   topK: 6,
   graphBoost: 1.12,
   enableServer: false, // opt-in: server REST locale per Claude/CLI
@@ -105,7 +107,8 @@ export default class ObsidianRagPlugin extends Plugin {
       const loaded = await this.indexer.tryLoad(this.embedder.model, this.embedder.dim);
       if (!loaded) {
         new Notice("RAG: indicizzo il vault…");
-        await this.indexer.reindexAll(false);
+        this.indexer.throttleMs = this.settings.indexThrottleMs;
+        await this.indexer.reindexAll(false, this.onIndexProgress);
       }
       ragLog.info(`pronto · ${this.store.count()} chunk indicizzati`);
       new Notice(`RAG pronto · ${this.store.count()} chunk`);
@@ -133,6 +136,18 @@ export default class ObsidianRagPlugin extends Plugin {
       new Notice("RAG: impossibile avviare il server — vedi «Log» nelle impostazioni.");
     }
   }
+
+  // Progresso indicizzazione → Log (throttled a step del 10%).
+  private lastIdxBucket = -1;
+  onIndexProgress = (done: number, total: number) => {
+    const pct = total ? Math.floor((done / total) * 100) : 0;
+    const bucket = Math.floor(pct / 10) * 10;
+    if (bucket > this.lastIdxBucket) {
+      this.lastIdxBucket = bucket;
+      ragLog.info(`indicizzazione: ${done}/${total} (${pct}%)`);
+    }
+    if (done >= total) this.lastIdxBucket = -1; // reset per il giro successivo
+  };
 
   // Progresso download modello → Log (throttled a step del 10% per file, così non spamma).
   private lastPct: Record<string, number> = {};
@@ -179,7 +194,8 @@ export default class ObsidianRagPlugin extends Plugin {
       return;
     }
     new Notice("RAG: reindicizzo…");
-    await this.indexer.reindexAll(force);
+    this.indexer.throttleMs = this.settings.indexThrottleMs;
+    await this.indexer.reindexAll(force, this.onIndexProgress);
     new Notice(`RAG: ${this.store.count()} chunk indicizzati.`);
   }
 
@@ -340,6 +356,16 @@ class RagSettingTab extends PluginSettingTab {
       .addText((t) =>
         t.setValue(String(this.plugin.settings.graphBoost)).onChange(async (v) => {
           this.plugin.settings.graphBoost = Number(v) || 1.12;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Throttle indicizzazione (ms)")
+      .setDesc("Pausa tra un file e l'altro durante l'indicizzazione: più alto = UI più fluida ma indicizzazione più lenta. 0 = massima velocità.")
+      .addText((t) =>
+        t.setValue(String(this.plugin.settings.indexThrottleMs)).onChange(async (v) => {
+          this.plugin.settings.indexThrottleMs = Math.max(0, Number(v) || 0);
           await this.plugin.saveSettings();
         }),
       );

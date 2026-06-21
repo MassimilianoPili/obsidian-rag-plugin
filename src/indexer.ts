@@ -25,6 +25,7 @@ export class Indexer {
   private adj = new Map<string, Set<string>>();
   private hashes: Record<string, string> = {};
   indexing = false;
+  throttleMs = 0; // pausa tra un file e l'altro durante l'indicizzazione (rate-limit anti-saturazione)
   // Serializzazione mutazioni: ogni write all'indice passa per questa catena (no race su index.json).
   private chain: Promise<void> = Promise.resolve();
   // Persist debounced: coalesce le scritture in burst di edit.
@@ -103,9 +104,11 @@ export class Indexer {
           ragLog.error(`indicizzazione fallita: ${f.path}`, e); // un file rotto non blocca il resto
         }
         progress?.(++done, files.length);
-        // Cede il thread alla UI ogni pochi file: l'embedding WASM è sincrono e bloccherebbe
-        // l'interfaccia di Obsidian durante l'indicizzazione iniziale.
-        if (done % 3 === 0) await new Promise((r) => setTimeout(r, 0));
+        // Rate-limit / yield: l'embedding WASM è sincrono e satura la CPU bloccando la UI.
+        // Con throttleMs>0 si mette una pausa esplicita tra i file; altrimenti si cede comunque
+        // il thread ogni 3 file.
+        if (this.throttleMs > 0) await new Promise((r) => setTimeout(r, this.throttleMs));
+        else if (done % 3 === 0) await new Promise((r) => setTimeout(r, 0));
       }
       const present = new Set(files.map((f) => f.path));
       for (const p of this.store.indexedFiles()) {
