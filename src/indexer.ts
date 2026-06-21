@@ -104,14 +104,17 @@ export class Indexer {
       ragLog.info(`indicizzazione avviata: ${files.length} file · CPU max ${this.maxCpuPercent}% · batch ${this.embedBatchSize}`);
       let done = 0;
       for (const f of files) {
+        let changed = false;
         try {
-          await this.indexOne(f);
+          changed = await this.indexOne(f);
         } catch (e) {
           ragLog.error(`indicizzazione fallita: ${f.path}`, e); // un file rotto non blocca il resto
         }
         progress?.(++done, files.length);
-        // Il duty-cycle per limitare la CPU è dentro embedPassages (anche per i file grandi);
-        // qui cediamo comunque il thread ogni 3 file per tenere viva la UI.
+        // Salva dopo OGNI file lavorato: se interrompi, il progresso NON si perde e al riavvio
+        // i file gia' fatti vengono saltati (hash) invece di riembeddarli da capo.
+        if (changed) await this.persist();
+        // duty-cycle per la CPU dentro embedPassages; qui cediamo il thread ogni 3 file.
         if (done % 3 === 0) await new Promise((r) => setTimeout(r, 0));
       }
       const present = new Set(files.map((f) => f.path));
