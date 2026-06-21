@@ -20,37 +20,34 @@ export class Embedder {
   async load(model: string, onProgress?: ProgressCb): Promise<void> {
     this.loading = true;
     try {
-      const mod: any = await import("@xenova/transformers");
-      // Diagnostica: logghiamo la forma reale degli export, così l'interop non è più a indovinare.
-      ragLog.info(
-        `transformers export: [${Object.keys(mod || {}).join(",")}] · default:[${Object.keys(mod?.default || {}).join(",")}]`,
-      );
-      // pipeline può stare sul namespace o sotto .default (interop CJS del bundle).
-      const lib: any =
-        typeof mod?.pipeline === "function"
-          ? mod
-          : typeof mod?.default?.pipeline === "function"
-            ? mod.default
-            : null;
-      if (!lib) throw new Error("transformers.js: funzione pipeline() non trovata negli export");
+      // transformers.js NON è bundlato (external in esbuild): si importa a runtime dal CDN come
+      // ESM browser-build, che si inizializza correttamente (env/pipeline validi, .wasm dal CDN).
+      // Bundlarlo lasciava il modulo a metà init: env undefined e pipeline() che legge mapping
+      // non inizializzati ("reading 'feature-extraction' of undefined").
+      // new Function() impedisce a esbuild di riscrivere/risolvere questo import().
+      const TRANSFORMERS_CDN = "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2";
+      ragLog.info(`embedder: importo transformers.js da ${TRANSFORMERS_CDN}`);
+      // NB sicurezza: corpo COSTANTE, nessuna interpolazione; l'URL è una costante passata come
+      // argomento. Serve solo a evitare che esbuild trasformi import() in require() (rompendo
+      // l'import da URL). Nessun input non fidato entra qui → nessun rischio di code injection.
+      const dynImport = new Function("u", "return import(u)") as (u: string) => Promise<any>;
+      const mod: any = await dynImport(TRANSFORMERS_CDN);
+      const lib: any = typeof mod?.pipeline === "function" ? mod : mod?.default;
+      if (!lib || typeof lib.pipeline !== "function") {
+        throw new Error("transformers.js: pipeline() non disponibile dopo l'import dal CDN");
+      }
 
-      const e: any = lib.env ?? mod?.env ?? mod?.default?.env;
+      const e: any = lib.env ?? mod?.env;
       if (e) {
         e.allowLocalModels = false; // scarica i modelli da HF CDN
         e.useBrowserCache = true;
-        // I .wasm di onnxruntime NON sono nel bundle: senza wasmPaths ort prova
-        // fileURLToPath(import.meta.url)=undefined → crash. CDN versione 1.14.0 + numThreads=1.
         try {
-          const wasm = e.backends?.onnx?.wasm;
-          if (wasm) {
-            wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/";
-            wasm.numThreads = 1;
-          }
+          if (e.backends?.onnx?.wasm) e.backends.onnx.wasm.numThreads = 1; // niente worker
         } catch (err) {
-          ragLog.warn("embedder: configurazione wasm ONNX fallita", err);
+          ragLog.warn("embedder: numThreads ONNX non impostabile", err);
         }
       } else {
-        ragLog.warn("embedder: transformers.env non disponibile — uso i default (wasm non configurato)");
+        ragLog.warn("embedder: transformers.env non disponibile dal CDN");
       }
 
       const build = (quantized: boolean) => {

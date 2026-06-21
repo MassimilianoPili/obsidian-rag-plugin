@@ -12,6 +12,9 @@ const external = [
   "@lezer/common", "@lezer/highlight", "@lezer/lr",
   "node:fs", "node:path", "node:os", "node:crypto",
   "sharp", // usato solo dalle pipeline immagini, non serve per il text embedding
+  // transformers.js NON va bundlato: esbuild lo lascia a metà init (env undefined, pipeline rotta).
+  // Lo importiamo a runtime dal CDN (vedi embedder.ts).
+  "@xenova/transformers",
 ];
 
 // transformers.js importa STATICAMENTE onnxruntime-node: in Obsidian (Electron) non esiste
