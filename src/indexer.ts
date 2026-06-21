@@ -103,6 +103,9 @@ export class Indexer {
           ragLog.error(`indicizzazione fallita: ${f.path}`, e); // un file rotto non blocca il resto
         }
         progress?.(++done, files.length);
+        // Cede il thread alla UI ogni pochi file: l'embedding WASM è sincrono e bloccherebbe
+        // l'interfaccia di Obsidian durante l'indicizzazione iniziale.
+        if (done % 3 === 0) await new Promise((r) => setTimeout(r, 0));
       }
       const present = new Set(files.map((f) => f.path));
       for (const p of this.store.indexedFiles()) {
