@@ -55,6 +55,10 @@ const workerOpts = {
   minify: prod,
 };
 
+// NB: il servizio embed-service.cjs NON va bundlato (bundlandolo l'onnxruntime-node esterno
+// disallinea il Tensor → "Tensor.location must be a string"). Si spedisce il .cjs plain accanto
+// a un node_modules self-contained (@huggingface/transformers con la sua ort nativa coerente).
+
 if (prod) {
   await esbuild.build(mainOpts);
   await esbuild.build(workerOpts);

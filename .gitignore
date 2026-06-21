@@ -5,3 +5,5 @@ data.json
 
 # onnxruntime wasm vendorizzato (grande): si copia da node_modules/@huggingface/transformers/dist
 *.wasm
+
+# node_modules self-contained del servizio (pesante, vendorizzato a runtime)

@@ -12,6 +12,8 @@ export interface RagSettings {
   autoLoadOnStartup: boolean; // se true carica modello+indice all'avvio (può rallentare Obsidian)
   maxCpuPercent: number; // limite CPU approssimato (duty-cycle) durante l'indicizzazione, 100 = no limite
   embedBatchSize: number; // chunk per batch di embedding (granularità del duty-cycle)
+  nodePath: string; // eseguibile Node per il servizio di embedding off-process (default "node")
+  embedServiceScript: string; // path assoluto a embed-service.cjs (vuoto = usa il main-thread)
   topK: number;
   graphBoost: number;
   enableServer: boolean;
@@ -34,6 +36,9 @@ export const DEFAULT_SETTINGS: RagSettings = {
   autoLoadOnStartup: false, // default: nessun caricamento all'avvio → apertura Obsidian leggera
   maxCpuPercent: 5, // default molto prudente: indicizzazione lenta ma UI fluidissima (duty-cycle)
   embedBatchSize: 8, // chunk per batch → duty-cycle anche dentro i file grandi
+  nodePath: "node",
+  // Vuoto = calcolato a runtime come <cartella-plugin>/embed-service.js (self-contained).
+  embedServiceScript: "",
   topK: 6,
   graphBoost: 1.12,
   enableServer: false, // opt-in: server REST locale per Claude/CLI
@@ -51,6 +56,11 @@ export default class ObsidianRagPlugin extends Plugin {
   async onload() {
     await this.loadSettings();
     this.indexer = new Indexer(this.app, this, this.store, this.embedder);
+    // Backend off-process (preferito): servizio Node con onnxruntime-node nativo. Il path di default
+    // è <cartella-plugin>/embed-service.js (self-contained, niente percorsi assoluti hardcoded).
+    this.embedder.nodePath = this.settings.nodePath || "node";
+    this.embedder.serviceScript =
+      this.settings.embedServiceScript || `${this.pluginDirAbs()}/embed-service.cjs`;
     // Il worker va creato SAME-ORIGIN: getResourcePath dà app://<vaultId>/… (origine diversa da
     // app://obsidian.md) → Worker cross-origin bloccato. Si legge worker.js e si crea un Blob URL.
     try {
@@ -108,6 +118,7 @@ export default class ObsidianRagPlugin extends Plugin {
   onunload() {
     this.server.stop();
     if (this.indexer) void this.indexer.flushPersist(); // salva una persist debounced pendente
+    this.embedder.dispose(); // chiudi il processo del servizio di embedding
   }
 
   private async init() {
@@ -254,6 +265,12 @@ export default class ObsidianRagPlugin extends Plugin {
 
   stripPrefix(c: string): string {
     return c.startsWith("[File:") ? c.slice(c.indexOf("\n") + 1) : c;
+  }
+
+  /** Path assoluto della cartella del plugin (per spawnare il servizio Node con cwd corretta). */
+  pluginDirAbs(): string {
+    const base = (this.app.vault.adapter as any).basePath ?? "";
+    return `${base}/${this.manifest.dir}`;
   }
 
   openFile(path: string) {
@@ -415,6 +432,30 @@ class RagSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Reindicizza ora")
       .addButton((b) => b.setButtonText("Reindex").onClick(() => this.plugin.reindex(true)));
+
+    containerEl.createEl("h3", { text: "Backend off-process (consigliato)" });
+    containerEl.createEl("p", {
+      text: "Esegue l'embedding in un processo Node esterno (onnxruntime nativo): niente freeze, velocità nativa. Richiede Node nel PATH. Se non parte, si ricade automaticamente sul main-thread.",
+      cls: "setting-item-description",
+    });
+    new Setting(containerEl)
+      .setName("Eseguibile Node")
+      .setDesc("Comando/percorso di Node (default «node», deve essere nel PATH).")
+      .addText((t) =>
+        t.setValue(this.plugin.settings.nodePath).onChange(async (v) => {
+          this.plugin.settings.nodePath = v.trim() || "node";
+          await this.plugin.saveSettings();
+        }),
+      );
+    new Setting(containerEl)
+      .setName("Script servizio (avanzato)")
+      .setDesc("Vuoto = <cartella-plugin>/embed-service.cjs. Imposta un path solo per override.")
+      .addText((t) =>
+        t.setValue(this.plugin.settings.embedServiceScript).onChange(async (v) => {
+          this.plugin.settings.embedServiceScript = v.trim();
+          await this.plugin.saveSettings();
+        }),
+      );
 
     containerEl.createEl("h3", { text: "Server REST locale (per Claude / CLI)" });
     new Setting(containerEl)
