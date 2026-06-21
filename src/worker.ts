@@ -1,35 +1,53 @@
-// Web Worker dell'embedding: transformers.js + onnxruntime-web bundlati per il browser
-// (vedi esbuild.config.mjs → worker.js). Gira su un thread separato dalla UI di Obsidian.
-// Protocollo messaggi: { id, type: 'load'|'embed', payload } → risponde { id, type, ... }.
-import { env, pipeline } from "@xenova/transformers";
+// Worker CLASSICO dell'embedding. NON bundliamo transformers/onnxruntime (esbuild rompe il
+// loader dei .wasm di ort → "no available backend"). Carichiamo invece la build UMD ufficiale
+// via importScripts dal CDN: è la build degli autori, col loader wasm integro. Gira off-thread.
+declare function importScripts(...urls: string[]): void;
 
+const DIST = "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js";
+const WASM = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/";
+
+const ctx: any = self;
+let T: any = null;
 let extractor: any = null;
 let isE5 = false;
 
-const ctx = self as unknown as Worker;
 const reply = (id: number, msg: Record<string, unknown>) => ctx.postMessage(Object.assign({ id }, msg));
+
+function findLib(): any {
+  if (ctx.transformers?.pipeline) return ctx.transformers;
+  for (const k of Object.keys(ctx)) {
+    const v = ctx[k];
+    if (v && typeof v.pipeline === "function" && v.env) return v;
+  }
+  return null;
+}
 
 ctx.onmessage = async (ev: MessageEvent) => {
   const { id, type, payload } = (ev.data || {}) as { id: number; type: string; payload: any };
   try {
     if (type === "load") {
-      env.allowLocalModels = false;
-      env.useBrowserCache = true;
+      if (!T) {
+        importScripts(DIST);
+        T = findLib();
+        if (!T) throw new Error("transformers UMD non trovato dopo importScripts");
+      }
+      T.env.allowLocalModels = false;
+      T.env.useBrowserCache = true;
       try {
-        const wasm = (env as any).backends?.onnx?.wasm;
-        if (wasm) {
-          if (payload.wasmPaths) wasm.wasmPaths = payload.wasmPaths;
-          wasm.numThreads = 1;
+        const w = T.env.backends?.onnx?.wasm;
+        if (w) {
+          w.wasmPaths = WASM;
+          w.numThreads = 1;
         }
       } catch {
-        /* usa i default */
+        /* default */
       }
       const onp = (p: any) => reply(id, { type: "progress", data: p });
       try {
-        extractor = await pipeline("feature-extraction", payload.model, { quantized: true, progress_callback: onp });
+        extractor = await T.pipeline("feature-extraction", payload.model, { quantized: true, progress_callback: onp });
       } catch (e: any) {
         reply(id, { type: "log", level: "warn", msg: "quantizzata non disponibile, full-precision: " + (e?.message || e) });
-        extractor = await pipeline("feature-extraction", payload.model, { quantized: false, progress_callback: onp });
+        extractor = await T.pipeline("feature-extraction", payload.model, { quantized: false, progress_callback: onp });
       }
       isE5 = /e5/i.test(payload.model);
       const probe = await extractor(["probe"], { pooling: "mean", normalize: true });
