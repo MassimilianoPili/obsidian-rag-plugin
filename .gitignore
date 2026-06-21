@@ -2,3 +2,6 @@ node_modules/
 main.js
 *.js.map
 data.json
+
+# onnxruntime wasm vendorizzato (grande): si copia da node_modules/@huggingface/transformers/dist
+*.wasm

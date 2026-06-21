@@ -35,14 +35,16 @@ const mainOpts = {
 // così nel Web Worker l'ambiente è rilevato come browser e il backend WASM si registra
 // correttamente (niente "process node" → niente InferenceSession undefined). I .wasm si
 // scaricano a runtime da wasmPaths (CDN). Servito in locale (stesso origine) → niente CORS.
-// Module-worker (format esm): NON bundla transformers (caricato a runtime via fetch+import(blob)
-// del bundle ESM ufficiale). esm mantiene import() nativo per il caricamento dinamico nel worker.
+// Module-worker (esm) che BUNDLA @huggingface/transformers v3 (web). Il .wasm di onnxruntime viene
+// emesso come asset (loader file) e a runtime fornito come Blob same-origin via wasmPaths a oggetto.
 const workerOpts = {
   entryPoints: ["src/worker.ts"],
   bundle: true,
   format: "esm",
   target: "es2020",
   platform: "browser",
+  loader: { ".wasm": "file" }, // emette ort-wasm-...jsep.wasm accanto a worker.js
+  assetNames: "[name]", // nome stabile (no hash) per ritrovarlo
   logLevel: "info",
   sourcemap: false,
   treeShaking: true,

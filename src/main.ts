@@ -57,7 +57,21 @@ export default class ObsidianRagPlugin extends Plugin {
       const code = await this.app.vault.adapter.read(`${this.manifest.dir}/worker.js`);
       this.embedder.workerUrl = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
     } catch (e) {
-      ragLog.error("worker.js non leggibile (rifai il sideload dei 4 file)", e);
+      ragLog.error("worker.js non leggibile (rifai il sideload)", e);
+    }
+    // Carica gli asset ONNX (il glue .mjs e il .wasm) come Blob same-origin: il worker li passa a
+    // ort via wasmPaths a oggetto, così il backend WASM si registra off-thread (niente CDN/CORS).
+    try {
+      const assets = ["ort-wasm-simd-threaded.jsep.mjs", "ort-wasm-simd-threaded.jsep.wasm"];
+      const map: Record<string, string> = {};
+      for (const name of assets) {
+        const buf = await this.app.vault.adapter.readBinary(`${this.manifest.dir}/${name}`);
+        const type = name.endsWith(".mjs") ? "text/javascript" : "application/wasm";
+        map[name] = URL.createObjectURL(new Blob([buf], { type }));
+      }
+      this.embedder.wasmBlobPaths = map;
+    } catch (e) {
+      ragLog.warn("asset ort non trovati (sideload mancante?) — fallback main-thread se il worker fallisce", e);
     }
 
     this.registerView(VIEW_TYPE_RAG, (leaf) => new RagView(leaf, this));

@@ -25,6 +25,7 @@ export class Embedder {
   dim = 0;
   loading = false;
   workerUrl = ""; // impostato da main: Blob URL same-origin di worker.js
+  wasmBlobPaths: Record<string, string> = {}; // { 'ort-...jsep.wasm': blobUrl } per il backend worker
   mode: "" | "worker" | "main" = "";
   private worker: Worker | null = null;
   private seq = 0;
@@ -110,7 +111,7 @@ export class Embedder {
 
   private async loadWorker(model: string, onProgress?: ProgressCb): Promise<void> {
     ragLog.info(`embedder(worker): carico «${model}» (thread separato)`);
-    const res = await this.request("load", { model, wasmPaths: WASM_CDN }, onProgress);
+    const res = await this.request("load", { model, wasmPaths: this.wasmBlobPaths }, onProgress);
     this.dim = res.dim;
   }
 
