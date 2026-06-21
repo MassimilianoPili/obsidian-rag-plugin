@@ -35,11 +35,12 @@ const mainOpts = {
 // così nel Web Worker l'ambiente è rilevato come browser e il backend WASM si registra
 // correttamente (niente "process node" → niente InferenceSession undefined). I .wasm si
 // scaricano a runtime da wasmPaths (CDN). Servito in locale (stesso origine) → niente CORS.
-// Worker CLASSICO (format iife): NON bundla transformers (caricato via importScripts dal CDN).
+// Module-worker (format esm): NON bundla transformers (caricato a runtime via fetch+import(blob)
+// del bundle ESM ufficiale). esm mantiene import() nativo per il caricamento dinamico nel worker.
 const workerOpts = {
   entryPoints: ["src/worker.ts"],
   bundle: true,
-  format: "iife",
+  format: "esm",
   target: "es2020",
   platform: "browser",
   logLevel: "info",

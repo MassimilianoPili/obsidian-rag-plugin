@@ -1,8 +1,7 @@
-// Worker CLASSICO dell'embedding. NON bundliamo transformers/onnxruntime (esbuild rompe il
-// loader dei .wasm di ort → "no available backend"). Carichiamo invece la build UMD ufficiale
-// via importScripts dal CDN: è la build degli autori, col loader wasm integro. Gira off-thread.
-declare function importScripts(...urls: string[]): void;
-
+// Module-worker dell'embedding (thread separato). Carica il bundle ESM ufficiale di transformers
+// (dist/transformers.min.js: self-contained, ort incluso, loader wasm integro) così:
+//   fetch del testo (cross-origin consentito) → Blob same-origin → import(blobUrl) (ESM).
+// Niente bundling di ort (rompeva il loader) e niente importScripts (la dist è ESM).
 const DIST = "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js";
 const WASM = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/";
 
@@ -13,29 +12,18 @@ let isE5 = false;
 
 const reply = (id: number, msg: Record<string, unknown>) => ctx.postMessage(Object.assign({ id }, msg));
 
-function findLib(): any {
-  if (ctx.transformers?.pipeline) return ctx.transformers;
-  for (const k of Object.keys(ctx)) {
-    const v = ctx[k];
-    if (v && typeof v.pipeline === "function" && v.env) return v;
-  }
-  return null;
-}
-
 ctx.onmessage = async (ev: MessageEvent) => {
   const { id, type, payload } = (ev.data || {}) as { id: number; type: string; payload: any };
   try {
     if (type === "load") {
       if (!T) {
-        // importScripts cross-origin è bloccato dalla CSP di Obsidian; fetch cross-origin no.
-        // Quindi: fetch del testo UMD → Blob same-origin → importScripts(blob) (consentito).
         const res = await fetch(DIST);
-        if (!res.ok) throw new Error("fetch transformers UMD: HTTP " + res.status);
+        if (!res.ok) throw new Error("fetch transformers dist: HTTP " + res.status);
         const code = await res.text();
         const blobUrl = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
-        importScripts(blobUrl);
-        T = findLib();
-        if (!T) throw new Error("transformers UMD non trovato dopo importScripts(blob)");
+        const mod: any = await import(blobUrl);
+        T = mod && typeof mod.pipeline === "function" ? mod : mod?.default;
+        if (!T || typeof T.pipeline !== "function") throw new Error("transformers dist: pipeline() mancante");
       }
       T.env.allowLocalModels = false;
       T.env.useBrowserCache = true;

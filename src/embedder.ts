@@ -35,7 +35,7 @@ export class Embedder {
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
     if (!this.workerUrl) throw new Error("workerUrl non impostato (worker.js non trovato)");
-    const w = new Worker(this.workerUrl); // worker CLASSICO (usa importScripts)
+    const w = new Worker(this.workerUrl, { type: "module" }); // module worker: usa import(blob)
     w.onmessage = (ev: MessageEvent) => {
       const m: any = ev.data || {};
       const p = this.pending.get(m.id);
