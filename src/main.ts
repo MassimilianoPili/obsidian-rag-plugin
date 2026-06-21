@@ -51,8 +51,14 @@ export default class ObsidianRagPlugin extends Plugin {
   async onload() {
     await this.loadSettings();
     this.indexer = new Indexer(this.app, this, this.store, this.embedder);
-    // URL locale (app://) del worker bundlato: stesso origine → niente CORS, backend WASM ok.
-    this.embedder.workerUrl = this.app.vault.adapter.getResourcePath(`${this.manifest.dir}/worker.js`);
+    // Il worker va creato SAME-ORIGIN: getResourcePath dà app://<vaultId>/… (origine diversa da
+    // app://obsidian.md) → Worker cross-origin bloccato. Si legge worker.js e si crea un Blob URL.
+    try {
+      const code = await this.app.vault.adapter.read(`${this.manifest.dir}/worker.js`);
+      this.embedder.workerUrl = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
+    } catch (e) {
+      ragLog.error("worker.js non leggibile (rifai il sideload dei 4 file)", e);
+    }
 
     this.registerView(VIEW_TYPE_RAG, (leaf) => new RagView(leaf, this));
     this.addRibbonIcon("search", "Obsidian RAG", () => this.activateView());
