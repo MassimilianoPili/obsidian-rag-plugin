@@ -41,7 +41,7 @@ export class Embedder {
   // Il backend WORKER è disabilitato: onnxruntime-web NON registra il suo backend in un worker
   // di Obsidian (6 strategie provate, tutte falliscono su InferenceSession.create). Si usa il
   // main-thread (provato funzionante). Tenuto il codice worker per un eventuale futuro.
-  useWorker = true;
+  useWorker = false;
 
   async load(model: string, onProgress?: ProgressCb): Promise<void> {
     this.loading = true;
