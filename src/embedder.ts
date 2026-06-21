@@ -91,9 +91,17 @@ export class Embedder {
         e.allowLocalModels = false; // scarica i modelli da HF CDN
         e.useBrowserCache = true;
         try {
-          if (e.backends?.onnx?.wasm) e.backends.onnx.wasm.numThreads = 1; // niente worker
+          const wasm = e.backends?.onnx?.wasm;
+          if (wasm) {
+            wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/";
+            wasm.numThreads = 1;
+            // proxy=true: l'inferenza ONNX gira in un Web Worker, NON sul thread della UI.
+            // È questo che evita il "freeze" di Obsidian durante l'embedding (la chiamata WASM
+            // è sincrona: senza worker bloccherebbe l'interfaccia per tutta la sua durata).
+            wasm.proxy = true;
+          }
         } catch (err) {
-          ragLog.warn("embedder: numThreads ONNX non impostabile", err);
+          ragLog.warn("embedder: configurazione wasm ONNX fallita", err);
         }
       } else {
         ragLog.warn("embedder: transformers.env non disponibile dal CDN");
