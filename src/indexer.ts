@@ -98,7 +98,12 @@ export class Indexer {
     }
     this.dirty = false;
     try {
-      if (force) this.hashes = {};
+      // BUG FIX: senza init lo store Orama (db) è null → gli insert sono no-op e serialize crasha.
+      // Inizializza su reindex forzato o se lo store non è pronto (indice fresco, tryLoad fallito).
+      if (force || !this.store.ready) {
+        await this.store.init(this.embedder.dim);
+        this.hashes = {};
+      }
       this.buildGraph();
       const files = this.app.vault.getMarkdownFiles();
       ragLog.info(`indicizzazione avviata: ${files.length} file · CPU max ${this.maxCpuPercent}% · batch ${this.embedBatchSize}`);
@@ -113,7 +118,13 @@ export class Indexer {
         progress?.(++done, files.length);
         // Salva dopo OGNI file lavorato: se interrompi, il progresso NON si perde e al riavvio
         // i file gia' fatti vengono saltati (hash) invece di riembeddarli da capo.
-        if (changed) await this.persist();
+        if (changed) {
+          try {
+            await this.persist();
+          } catch (e) {
+            ragLog.warn("persist per-file fallita (continuo)", e);
+          }
+        }
         // duty-cycle per la CPU dentro embedPassages; qui cediamo il thread ogni 3 file.
         if (done % 3 === 0) await new Promise((r) => setTimeout(r, 0));
       }

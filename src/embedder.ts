@@ -38,17 +38,28 @@ export class Embedder {
     return this.mode === "worker" ? this.worker !== null : this.extractor !== null;
   }
 
+  // Il backend WORKER è disabilitato: onnxruntime-web NON registra il suo backend in un worker
+  // di Obsidian (6 strategie provate, tutte falliscono su InferenceSession.create). Si usa il
+  // main-thread (provato funzionante). Tenuto il codice worker per un eventuale futuro.
+  useWorker = false;
+
   async load(model: string, onProgress?: ProgressCb): Promise<void> {
     this.loading = true;
     this.isE5 = /e5/i.test(model);
     try {
-      try {
-        await this.loadWorker(model, onProgress);
-        this.mode = "worker";
-        ragLog.info(`embedder: backend WORKER (off-thread) · «${model}» · dim ${this.dim}`);
-      } catch (e) {
-        ragLog.warn("embedder: worker non disponibile, fallback MAIN-THREAD", e);
-        this.disposeWorker();
+      let ok = false;
+      if (this.useWorker) {
+        try {
+          await this.loadWorker(model, onProgress);
+          this.mode = "worker";
+          ok = true;
+          ragLog.info(`embedder: backend WORKER (off-thread) · «${model}» · dim ${this.dim}`);
+        } catch (e) {
+          ragLog.warn("embedder: worker non disponibile, fallback MAIN-THREAD", e);
+          this.disposeWorker();
+        }
+      }
+      if (!ok) {
         await this.loadMain(model, onProgress);
         this.mode = "main";
         ragLog.info(`embedder: backend MAIN-THREAD · «${model}» · dim ${this.dim}`);
