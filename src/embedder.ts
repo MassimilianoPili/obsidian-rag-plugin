@@ -35,13 +35,51 @@ export class Embedder {
       // il backend onnxruntime-node (assente) → "InferenceSession.create of undefined". Mascheriamo
       // process.release SOLO durante l'import, così sceglie il backend WEB/WASM; poi lo ripristiniamo.
       const proc: any = (globalThis as any).process;
-      const savedRelease = proc?.release;
+      const undo: Array<() => void> = [];
+      const maskNode = () => {
+        if (!proc || proc?.release?.name !== "node") return;
+        // Tentativo A: cambia release.name (spesso scrivibile anche se release è read-only).
+        try {
+          const saved = proc.release.name;
+          proc.release.name = "obsidian";
+          if (proc.release.name !== "node") {
+            undo.push(() => {
+              try {
+                proc.release.name = saved;
+              } catch {
+                /* ignore */
+              }
+            });
+            return;
+          }
+        } catch {
+          /* prova B */
+        }
+        // Tentativo B: ridefinisci la proprietà release.
+        try {
+          const savedRel = proc.release;
+          Object.defineProperty(proc, "release", {
+            configurable: true,
+            writable: true,
+            value: Object.assign({}, savedRel, { name: "obsidian" }),
+          });
+          undo.push(() => {
+            try {
+              Object.defineProperty(proc, "release", { configurable: true, writable: true, value: savedRel });
+            } catch {
+              /* ignore */
+            }
+          });
+        } catch (e) {
+          ragLog.warn("embedder: impossibile mascherare process.release per il backend WASM", e);
+        }
+      };
       let mod: any;
       try {
-        if (proc) proc.release = undefined;
+        maskNode();
         mod = await dynImport(TRANSFORMERS_CDN);
       } finally {
-        if (proc) proc.release = savedRelease;
+        for (const u of undo) u();
       }
       const lib: any = typeof mod?.pipeline === "function" ? mod : mod?.default;
       if (!lib || typeof lib.pipeline !== "function") {
