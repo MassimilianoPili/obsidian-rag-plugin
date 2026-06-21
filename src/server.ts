@@ -5,6 +5,7 @@
 // bisogno; abilitarlo permetterebbe a una pagina web di leggere le note); validazione dell'Host
 // header (anti DNS-rebinding); body cap + timeout; API key Bearer richiesta di default.
 import type ObsidianRagPlugin from "./main";
+import { RAG_PROMPT, RAG_TOOLS } from "./prompt";
 
 const BODY_CAP = 1_000_000; // 1 MB
 const REQ_TIMEOUT_MS = 15_000;
@@ -70,8 +71,9 @@ export class RagServer {
 
         const url = new URL(req.url, "http://localhost");
 
-        // Auth Bearer richiesta su tutto tranne /health.
-        if (apiKey && url.pathname !== "/health") {
+        // Auth Bearer richiesta su tutto tranne gli endpoint di discovery (no dati sensibili).
+        const noAuth = url.pathname === "/health" || url.pathname === "/prompt" || url.pathname === "/tools";
+        if (apiKey && !noAuth) {
           if ((req.headers["authorization"] || "") !== `Bearer ${apiKey}`) {
             return send(401, { error: "unauthorized" });
           }
@@ -84,6 +86,17 @@ export class RagServer {
             ready: this.plugin.embedder.ready,
             chunks: this.plugin.store.count(),
           });
+        }
+
+        if (url.pathname === "/tools") {
+          return send(200, { tools: RAG_TOOLS });
+        }
+
+        if (url.pathname === "/prompt") {
+          // testo semplice: pronto da iniettare in un system prompt
+          res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end(RAG_PROMPT);
+          return;
         }
 
         if (url.pathname === "/search" && req.method === "GET") {

@@ -2,6 +2,7 @@ import { App, Notice, Plugin, PluginSettingTab, Setting, TFile } from "obsidian"
 import { Embedder } from "./embedder";
 import { Indexer } from "./indexer";
 import { ragLog } from "./logger";
+import { RAG_PROMPT } from "./prompt";
 import { RagServer } from "./server";
 import { HybridStore, SearchResult } from "./store";
 import { RagView, VIEW_TYPE_RAG } from "./view";
@@ -61,28 +62,6 @@ export default class ObsidianRagPlugin extends Plugin {
     this.embedder.nodePath = this.settings.nodePath || "node";
     this.embedder.serviceScript =
       this.settings.embedServiceScript || `${this.pluginDirAbs()}/embed-service.cjs`;
-    // Il worker va creato SAME-ORIGIN: getResourcePath dà app://<vaultId>/… (origine diversa da
-    // app://obsidian.md) → Worker cross-origin bloccato. Si legge worker.js e si crea un Blob URL.
-    try {
-      const code = await this.app.vault.adapter.read(`${this.manifest.dir}/worker.js`);
-      this.embedder.workerUrl = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
-    } catch (e) {
-      ragLog.error("worker.js non leggibile (rifai il sideload)", e);
-    }
-    // Carica gli asset ONNX (il glue .mjs e il .wasm) come Blob same-origin: il worker li passa a
-    // ort via wasmPaths a oggetto, così il backend WASM si registra off-thread (niente CDN/CORS).
-    try {
-      const assets = ["ort-wasm-simd-threaded.jsep.mjs", "ort-wasm-simd-threaded.jsep.wasm"];
-      const map: Record<string, string> = {};
-      for (const name of assets) {
-        const buf = await this.app.vault.adapter.readBinary(`${this.manifest.dir}/${name}`);
-        const type = name.endsWith(".mjs") ? "text/javascript" : "application/wasm";
-        map[name] = URL.createObjectURL(new Blob([buf], { type }));
-      }
-      this.embedder.wasmBlobPaths = map;
-    } catch (e) {
-      ragLog.warn("asset ort non trovati (sideload mancante?) — fallback main-thread se il worker fallisce", e);
-    }
 
     this.registerView(VIEW_TYPE_RAG, (leaf) => new RagView(leaf, this));
     this.addRibbonIcon("search", "Obsidian RAG", () => this.activateView());
@@ -95,6 +74,14 @@ export default class ObsidianRagPlugin extends Plugin {
       callback: async () => {
         await navigator.clipboard.writeText(ragLog.format());
         new Notice("RAG: log copiato negli appunti.");
+      },
+    });
+    this.addCommand({
+      id: "rag-copy-prompt",
+      name: "Copia prompt per agente (tool list)",
+      callback: async () => {
+        await navigator.clipboard.writeText(RAG_PROMPT);
+        new Notice("RAG: prompt+tool per agente copiato negli appunti.");
       },
     });
     this.addSettingTab(new RagSettingTab(this.app, this));

@@ -59,13 +59,12 @@ const workerOpts = {
 // disallinea il Tensor → "Tensor.location must be a string"). Si spedisce il .cjs plain accanto
 // a un node_modules self-contained (@huggingface/transformers con la sua ort nativa coerente).
 
+// NB: workerOpts non viene più buildato (worker disabilitato: ort non gira nei worker di Obsidian).
 if (prod) {
   await esbuild.build(mainOpts);
-  await esbuild.build(workerOpts);
 } else {
   const c1 = await esbuild.context(mainOpts);
-  const c2 = await esbuild.context(workerOpts);
   await c1.watch();
-  await c2.watch();
-  console.log("watching main.js + worker.js…");
+  console.log("watching main.js…");
 }
+void workerOpts;
