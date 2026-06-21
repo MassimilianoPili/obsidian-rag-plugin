@@ -27,9 +27,15 @@ ctx.onmessage = async (ev: MessageEvent) => {
   try {
     if (type === "load") {
       if (!T) {
-        importScripts(DIST);
+        // importScripts cross-origin è bloccato dalla CSP di Obsidian; fetch cross-origin no.
+        // Quindi: fetch del testo UMD → Blob same-origin → importScripts(blob) (consentito).
+        const res = await fetch(DIST);
+        if (!res.ok) throw new Error("fetch transformers UMD: HTTP " + res.status);
+        const code = await res.text();
+        const blobUrl = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
+        importScripts(blobUrl);
         T = findLib();
-        if (!T) throw new Error("transformers UMD non trovato dopo importScripts");
+        if (!T) throw new Error("transformers UMD non trovato dopo importScripts(blob)");
       }
       T.env.allowLocalModels = false;
       T.env.useBrowserCache = true;
