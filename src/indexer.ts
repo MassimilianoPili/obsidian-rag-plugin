@@ -25,7 +25,8 @@ export class Indexer {
   private adj = new Map<string, Set<string>>();
   private hashes: Record<string, string> = {};
   indexing = false;
-  throttleMs = 0; // pausa tra un file e l'altro durante l'indicizzazione (rate-limit anti-saturazione)
+  maxCpuPercent = 100; // <100 = duty-cycle (lavora/dormi proporzionale) per limitare la CPU
+  embedBatchSize = 0; // >0: embedda i chunk di un file a batch (duty-cycle anche DENTRO il file)
   // Serializzazione mutazioni: ogni write all'indice passa per questa catena (no race su index.json).
   private chain: Promise<void> = Promise.resolve();
   // Persist debounced: coalesce le scritture in burst di edit.
@@ -77,7 +78,11 @@ export class Indexer {
       delete this.hashes[f.path];
       return false;
     }
-    const embs = await this.embedder.embedPassages(chunks.map((c) => c.content));
+    const embs = await this.embedder.embedPassages(
+      chunks.map((c) => c.content),
+      this.embedBatchSize,
+      this.maxCpuPercent,
+    );
     await this.store.replaceFile(f.path, chunks, embs);
     this.hashes[f.path] = h;
     return true;
@@ -96,6 +101,7 @@ export class Indexer {
       if (force) this.hashes = {};
       this.buildGraph();
       const files = this.app.vault.getMarkdownFiles();
+      ragLog.info(`indicizzazione avviata: ${files.length} file · CPU max ${this.maxCpuPercent}% · batch ${this.embedBatchSize}`);
       let done = 0;
       for (const f of files) {
         try {
@@ -104,11 +110,9 @@ export class Indexer {
           ragLog.error(`indicizzazione fallita: ${f.path}`, e); // un file rotto non blocca il resto
         }
         progress?.(++done, files.length);
-        // Rate-limit / yield: l'embedding WASM è sincrono e satura la CPU bloccando la UI.
-        // Con throttleMs>0 si mette una pausa esplicita tra i file; altrimenti si cede comunque
-        // il thread ogni 3 file.
-        if (this.throttleMs > 0) await new Promise((r) => setTimeout(r, this.throttleMs));
-        else if (done % 3 === 0) await new Promise((r) => setTimeout(r, 0));
+        // Il duty-cycle per limitare la CPU è dentro embedPassages (anche per i file grandi);
+        // qui cediamo comunque il thread ogni 3 file per tenere viva la UI.
+        if (done % 3 === 0) await new Promise((r) => setTimeout(r, 0));
       }
       const present = new Set(files.map((f) => f.path));
       for (const p of this.store.indexedFiles()) {

@@ -127,9 +127,28 @@ export class Embedder {
     return out.tolist() as number[][];
   }
 
-  async embedPassages(texts: string[]): Promise<number[][]> {
+  // Embedding con duty-cycle: embedda a batch e, se maxCpuPercent<100, dorme in proporzione al
+  // tempo di lavoro (sleep = lavoro*(100/pct - 1)). Approssima un "limite CPU %" globale, anche
+  // DENTRO un file con molti chunk. maxCpuPercent>=100 → nessun limite (un solo batch).
+  async embedPassages(texts: string[], batchSize = 0, maxCpuPercent = 100): Promise<number[][]> {
     const items = this.isE5 ? texts.map((x) => `passage: ${x}`) : texts;
-    return this.embedRaw(items);
+    const pct = Math.min(100, Math.max(5, maxCpuPercent || 100));
+    if (pct >= 100 && (!batchSize || batchSize >= items.length)) return this.embedRaw(items);
+    const bs = batchSize > 0 ? batchSize : items.length;
+    const out: number[][] = [];
+    for (let i = 0; i < items.length; i += bs) {
+      const t0 = Date.now();
+      const r = await this.embedRaw(items.slice(i, i + bs));
+      for (const v of r) out.push(v);
+      if (pct < 100) {
+        const dt = Date.now() - t0;
+        const sleep = Math.min(2000, Math.round(dt * (100 / pct - 1))); // cap a 2s per sicurezza
+        if (sleep > 0) await new Promise((res) => setTimeout(res, sleep));
+      } else {
+        await new Promise((res) => setTimeout(res, 0)); // yield comunque
+      }
+    }
+    return out;
   }
 
   async embedQuery(text: string): Promise<number[]> {

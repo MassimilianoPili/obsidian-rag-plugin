@@ -10,7 +10,8 @@ export interface RagSettings {
   embedModel: string;
   modelConfirmed: boolean; // il modello si scarica/carica solo dopo conferma esplicita dell'utente
   autoLoadOnStartup: boolean; // se true carica modello+indice all'avvio (può rallentare Obsidian)
-  indexThrottleMs: number; // pausa tra un file e l'altro in indicizzazione (anti-saturazione CPU)
+  maxCpuPercent: number; // limite CPU approssimato (duty-cycle) durante l'indicizzazione, 100 = no limite
+  embedBatchSize: number; // chunk per batch di embedding (granularità del duty-cycle)
   topK: number;
   graphBoost: number;
   enableServer: boolean;
@@ -31,7 +32,8 @@ export const DEFAULT_SETTINGS: RagSettings = {
   embedModel: "Xenova/multilingual-e5-small", // pre-selezionato nella tendina, NON scaricato finché non confermi
   modelConfirmed: false,
   autoLoadOnStartup: false, // default: nessun caricamento all'avvio → apertura Obsidian leggera
-  indexThrottleMs: 15, // piccola pausa per-file: tiene la UI fluida durante l'indicizzazione
+  maxCpuPercent: 50, // limite CPU approssimato durante l'indicizzazione (duty-cycle)
+  embedBatchSize: 8, // chunk per batch → duty-cycle anche dentro i file grandi
   topK: 6,
   graphBoost: 1.12,
   enableServer: false, // opt-in: server REST locale per Claude/CLI
@@ -107,7 +109,8 @@ export default class ObsidianRagPlugin extends Plugin {
       const loaded = await this.indexer.tryLoad(this.embedder.model, this.embedder.dim);
       if (!loaded) {
         new Notice("RAG: indicizzo il vault…");
-        this.indexer.throttleMs = this.settings.indexThrottleMs;
+        this.indexer.maxCpuPercent = this.settings.maxCpuPercent;
+        this.indexer.embedBatchSize = this.settings.embedBatchSize;
         await this.indexer.reindexAll(false, this.onIndexProgress);
       }
       ragLog.info(`pronto · ${this.store.count()} chunk indicizzati`);
@@ -194,7 +197,8 @@ export default class ObsidianRagPlugin extends Plugin {
       return;
     }
     new Notice("RAG: reindicizzo…");
-    this.indexer.throttleMs = this.settings.indexThrottleMs;
+    this.indexer.maxCpuPercent = this.settings.maxCpuPercent;
+    this.indexer.embedBatchSize = this.settings.embedBatchSize;
     await this.indexer.reindexAll(force, this.onIndexProgress);
     new Notice(`RAG: ${this.store.count()} chunk indicizzati.`);
   }
@@ -361,11 +365,11 @@ class RagSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Throttle indicizzazione (ms)")
-      .setDesc("Pausa tra un file e l'altro durante l'indicizzazione: più alto = UI più fluida ma indicizzazione più lenta. 0 = massima velocità.")
+      .setName("Limite CPU indicizzazione (%)")
+      .setDesc("Quota di CPU usata per l'embedding (duty-cycle): 50 = lavora ~metà del tempo e dorme l'altra metà → UI più fluida ma indicizzazione più lenta. 100 = nessun limite.")
       .addText((t) =>
-        t.setValue(String(this.plugin.settings.indexThrottleMs)).onChange(async (v) => {
-          this.plugin.settings.indexThrottleMs = Math.max(0, Number(v) || 0);
+        t.setValue(String(this.plugin.settings.maxCpuPercent)).onChange(async (v) => {
+          this.plugin.settings.maxCpuPercent = Math.min(100, Math.max(5, Number(v) || 50));
           await this.plugin.saveSettings();
         }),
       );
