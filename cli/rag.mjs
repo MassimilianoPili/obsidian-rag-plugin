@@ -103,14 +103,97 @@ function printResults(j) {
   });
 }
 
-const usage = `rag — CLI del RAG Obsidian (no MCP)
+const VERSION = "0.1.0";
 
-Comandi:
-  health                      stato del server + modello + n. chunk
-  search "<query>" [-k N]     ricerca ibrida (default k=6). --json per output grezzo
-  ask "<query>"               estratti citati (endpoint /v1/chat/completions)
+const usage = `rag — CLI del RAG locale di Obsidian (Knowledge Base, senza MCP)  v${VERSION}
 
-Config: --port/--key, oppure env RAG_PORT/RAG_KEY, oppure --data <data.json>/RAG_DATA`;
+USO
+  rag <comando> [opzioni]
+
+COMANDI
+  search "<query>" [-k N]   Ricerca ibrida (BM25 + vettoriale + grafo dei wikilink). Default k=6.
+  ask "<query>"             Estratti citati e formattati (endpoint OpenAI-compatible /v1).
+  health                    Stato del server: modello, numero di chunk, ready.
+  prompt                    Stampa un mini system-prompt + la lista dei tool, da dare a un LLM.
+  tools                     Lista dei tool in JSON (per agenti che vogliono il manifest).
+  help | -h | --help        Questo aiuto.
+  version | --version       Versione.
+
+OPZIONI
+  -k, --k N                 Numero di risultati per 'search' (default 6).
+  --json                    Output JSON grezzo (per 'search').
+  --port N                  Porta del server REST (default 8765).
+  --key <bearer>            API key Bearer (per /search e /v1; non serve per /health).
+  --data <path>             Legge porta+key dal data.json del plugin.
+
+CONFIG (precedenza: flag > env > file)
+  flag:  --port  --key  --data
+  env:   RAG_PORT  RAG_KEY  RAG_DATA
+  file:  --data <…/.obsidian/plugins/obsidian-rag/data.json>
+
+ESEMPI
+  rag health --port 8765
+  rag search "verifica inadempienza" -k 8 --data "$RAG_DATA"
+  rag ask "come funziona la VI sopra soglia?" --data "$RAG_DATA"
+  rag prompt > rag-tools.md     # da iniettare in un agente LLM
+
+NOTE
+  Richiede Obsidian aperto col plugin attivo e "server REST" abilitato (default ON).
+  Server loopback (127.0.0.1): /health è senza auth, gli altri richiedono Bearer.`;
+
+// Mini system-prompt + tool list: un LLM lo legge per sapere COME interrogare la KB.
+const PROMPT = `# RAG locale — Knowledge Base "Diritti Civili (DC)"
+
+Hai accesso a una Knowledge Base tecnica/funzionale indicizzata con ricerca IBRIDA
+(BM25 lessicale + vettoriale semantica + boost dal grafo dei wikilink). Interrogala con:
+
+TOOL
+- rag search "<query>" [-k N]   → top-N estratti: "file · sezione" + testo. Default N=6.
+- rag ask "<query>"             → estratti citati già formattati (per comporre una risposta).
+- rag health                    → stato (modello, n. chunk).
+
+COME INTERROGARE BENE
+1. Query in italiano, in linguaggio naturale e SPECIFICHE. I prefissi del modello
+   (query:/passage:) sono gestiti internamente: non aggiungerli.
+2. Usa i TERMINI DI DOMINIO e i loro alias: le entità sono indicizzate con i sinonimi
+   (es. "VI" = verifica inadempienza; "OP" = ordine di pagamento; "ODA" = ordinanza di
+   assegnazione). Cercare l'acronimo o il nome esteso funziona ugualmente.
+3. Calibra -k: domande ampie/esplorative → -k 8..12; fatti puntuali → -k 3..5.
+4. Se la prima query non basta, RIFORMULA con sinonimi o scomponila in sotto-domande
+   (multi-query) invece di insistere con le stesse parole.
+5. I risultati citano "file · sezione": cita la fonte e, se presenti, rispetta i campi
+   di provenance inline ^[source:: …] ^[confidence:: …]. NON inventare: se gli estratti
+   non coprono la domanda, dillo o raffina la ricerca.
+
+WORKFLOW CONSIGLIATO
+  prima 'search' per individuare le note rilevanti → poi 'ask' (o 'search -k' più alto)
+  sulle note/sezioni emerse per estrarre il dettaglio da citare.`;
+
+// Manifest dei tool (JSON) per agenti che preferiscono un descrittore strutturato.
+const TOOLS = [
+  {
+    name: "search",
+    description:
+      "Ricerca ibrida (BM25+vettoriale+grafo) sulla KB. Ritorna i top-k estratti con file, sezione, testo, score.",
+    invoke: 'rag search "<query>" [-k N] [--json]',
+    http: "GET /search?q=<query>&k=<N>  (Bearer)",
+    params: { query: "stringa, linguaggio naturale", k: "int, default 6" },
+  },
+  {
+    name: "ask",
+    description: "Come search ma ritorna estratti citati già formattati (endpoint OpenAI-compatible).",
+    invoke: 'rag ask "<query>"',
+    http: "POST /v1/chat/completions {messages:[{role:'user',content:'<query>'}]}  (Bearer)",
+    params: { query: "stringa" },
+  },
+  {
+    name: "health",
+    description: "Stato del server: modello, numero di chunk, ready.",
+    invoke: "rag health",
+    http: "GET /health  (no auth)",
+    params: {},
+  },
+];
 
 const run = {
   async health() {
@@ -135,9 +218,25 @@ const run = {
     const content = j.choices?.[0]?.message?.content ?? JSON.stringify(j);
     process.stdout.write(content + "\n");
   },
+  prompt() {
+    process.stdout.write(PROMPT + "\n");
+  },
+  tools() {
+    process.stdout.write(JSON.stringify(TOOLS, null, 2) + "\n");
+  },
+  version() {
+    process.stdout.write("rag " + VERSION + "\n");
+  },
+  help() {
+    process.stdout.write(usage + "\n");
+  },
 };
 
-if (!cmd || has("-h") || has("--help") || !run[cmd]) {
+if (cmd === "version" || has("--version")) {
+  process.stdout.write("rag " + VERSION + "\n");
+  process.exit(0);
+}
+if (!cmd || cmd === "help" || has("-h") || has("--help") || !run[cmd]) {
   process.stdout.write(usage + "\n");
   process.exit(cmd && !run[cmd] ? 1 : 0);
 }
