@@ -11,6 +11,7 @@ export interface RagSettings {
   embedModel: string;
   modelConfirmed: boolean; // il modello si scarica/carica solo dopo conferma esplicita dell'utente
   autoLoadOnStartup: boolean; // se true carica modello+indice all'avvio (può rallentare Obsidian)
+  syncOnStartup: boolean; // dopo aver ripristinato l'indice, riallinea col vault (delta via hash)
   maxCpuPercent: number; // limite CPU approssimato (duty-cycle) durante l'indicizzazione, 100 = no limite
   embedBatchSize: number; // chunk per batch di embedding (granularità del duty-cycle)
   nodePath: string; // eseguibile Node per il servizio di embedding off-process (default "node")
@@ -35,6 +36,7 @@ export const DEFAULT_SETTINGS: RagSettings = {
   embedModel: "Xenova/multilingual-e5-small", // pre-selezionato nella tendina, NON scaricato finché non confermi
   modelConfirmed: false,
   autoLoadOnStartup: false, // default: nessun caricamento all'avvio → apertura Obsidian leggera
+  syncOnStartup: true, // riallinea l'indice al vault all'avvio (recupera anche modifiche esterne)
   maxCpuPercent: 5, // default molto prudente: indicizzazione lenta ma UI fluidissima (duty-cycle)
   embedBatchSize: 8, // chunk per batch → duty-cycle anche dentro i file grandi
   nodePath: "node",
@@ -129,15 +131,21 @@ export default class ObsidianRagPlugin extends Plugin {
       new Notice(`RAG: carico «${short}» (download al primo uso)…`, 6000);
       await this.embedder.load(this.settings.embedModel, this.onModelProgress);
       const loaded = await this.indexer.tryLoad(this.embedder.model, this.embedder.dim);
+      this.indexer.maxCpuPercent = this.settings.maxCpuPercent;
+      this.indexer.embedBatchSize = this.settings.embedBatchSize;
       if (!loaded) {
         if (allowReindex) {
           new Notice("RAG: indicizzo il vault…");
-          this.indexer.maxCpuPercent = this.settings.maxCpuPercent;
-          this.indexer.embedBatchSize = this.settings.embedBatchSize;
           await this.indexer.reindexAll(false, this.onIndexProgress);
         } else {
           new Notice("RAG: modello pronto. Premi «Reindicizza» per creare l'indice.", 6000);
         }
+      } else if (this.settings.syncOnStartup) {
+        // Reconcile: indice ripristinato → riallinea col vault. reindexAll(false) con store già
+        // pronto NON azzera gli hash → embedda solo i file nuovi/cambiati e rimuove i cancellati.
+        // Cattura anche le modifiche fatte con Obsidian/plugin chiuso.
+        ragLog.info("sincronizzo l'indice col vault (solo file nuovi/cambiati)…");
+        await this.indexer.reindexAll(false, this.onIndexProgress);
       }
       ragLog.info(`pronto · ${this.store.count()} chunk indicizzati`);
       new Notice(`RAG pronto · ${this.store.count()} chunk`);
@@ -365,6 +373,16 @@ class RagSettingTab extends PluginSettingTab {
           : this.plugin.embedder.ready
             ? `Pronto · ${this.plugin.embedder.model} · ${this.plugin.store.count()} chunk`
             : "Non caricato — scegli un modello e premi «Carica modello».",
+      );
+
+    new Setting(containerEl)
+      .setName("Sincronizza all'avvio")
+      .setDesc("All'avvio riallinea l'indice al vault: embedda solo i file nuovi/cambiati (via hash) e rimuove i cancellati. Recupera anche le modifiche fatte con Obsidian chiuso. Default ON.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.syncOnStartup).onChange(async (v) => {
+          this.plugin.settings.syncOnStartup = v;
+          await this.plugin.saveSettings();
+        }),
       );
 
     new Setting(containerEl)
