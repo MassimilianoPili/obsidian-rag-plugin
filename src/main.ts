@@ -9,6 +9,7 @@ import { RagView, VIEW_TYPE_RAG } from "./view";
 export interface RagSettings {
   embedModel: string;
   modelConfirmed: boolean; // il modello si scarica/carica solo dopo conferma esplicita dell'utente
+  autoLoadOnStartup: boolean; // se true carica modello+indice all'avvio (può rallentare Obsidian)
   topK: number;
   graphBoost: number;
   enableServer: boolean;
@@ -28,6 +29,7 @@ export const SUGGESTED_MODELS: { id: string; label: string }[] = [
 export const DEFAULT_SETTINGS: RagSettings = {
   embedModel: "Xenova/multilingual-e5-small", // pre-selezionato nella tendina, NON scaricato finché non confermi
   modelConfirmed: false,
+  autoLoadOnStartup: false, // default: nessun caricamento all'avvio → apertura Obsidian leggera
   topK: 6,
   graphBoost: 1.12,
   enableServer: false, // opt-in: server REST locale per Claude/CLI
@@ -83,12 +85,11 @@ export default class ObsidianRagPlugin extends Plugin {
   }
 
   private async init() {
-    // Nessun download automatico: il modello si carica solo dopo scelta esplicita dell'utente.
-    if (!this.settings.modelConfirmed) {
-      new Notice("RAG: scegli il modello nelle impostazioni del plugin e premi «Carica modello».", 8000);
-      return;
+    // Niente caricamento all'avvio salvo opt-in esplicito: evita il lag all'apertura di Obsidian.
+    // Di default si carica a richiesta dal bottone «Carica modello».
+    if (this.settings.modelConfirmed && this.settings.autoLoadOnStartup) {
+      await this.loadModelAndIndex();
     }
-    await this.loadModelAndIndex();
   }
 
   /** Scarica/attiva il modello selezionato e (re)indicizza. Invocato dal bottone o all'avvio se già confermato. */
@@ -312,6 +313,16 @@ class RagSettingTab extends PluginSettingTab {
           : this.plugin.embedder.ready
             ? `Pronto · ${this.plugin.embedder.model} · ${this.plugin.store.count()} chunk`
             : "Non caricato — scegli un modello e premi «Carica modello».",
+      );
+
+    new Setting(containerEl)
+      .setName("Carica all'avvio di Obsidian")
+      .setDesc("Se attivo, all'apertura carica il modello e aggiorna l'indice — può rallentare l'avvio. Default OFF: carica a richiesta col bottone qui sopra.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.autoLoadOnStartup).onChange(async (v) => {
+          this.plugin.settings.autoLoadOnStartup = v;
+          await this.plugin.saveSettings();
+        }),
       );
 
     new Setting(containerEl)
