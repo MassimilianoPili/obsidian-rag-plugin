@@ -119,21 +119,27 @@ export default class ObsidianRagPlugin extends Plugin {
   }
 
   /** Scarica/attiva il modello selezionato e (re)indicizza. Invocato dal bottone o all'avvio se già confermato. */
-  async loadModelAndIndex() {
+  // allowReindex=false (avvio automatico): carica il modello e ripristina l'indice da disco, ma
+  // NON reindicizza (evita lag all'avvio). allowReindex=true (bottone): se non c'è indice, indicizza.
+  async loadModelAndIndex(allowReindex = true) {
     if (this.embedder.loading) {
       new Notice("RAG: caricamento del modello già in corso…");
       return;
     }
     try {
       const short = this.settings.embedModel.split("/").pop();
-      new Notice(`RAG: carico «${short}» (download dal CDN al primo uso)…`, 6000);
+      new Notice(`RAG: carico «${short}» (download al primo uso)…`, 6000);
       await this.embedder.load(this.settings.embedModel, this.onModelProgress);
       const loaded = await this.indexer.tryLoad(this.embedder.model, this.embedder.dim);
       if (!loaded) {
-        new Notice("RAG: indicizzo il vault…");
-        this.indexer.maxCpuPercent = this.settings.maxCpuPercent;
-        this.indexer.embedBatchSize = this.settings.embedBatchSize;
-        await this.indexer.reindexAll(false, this.onIndexProgress);
+        if (allowReindex) {
+          new Notice("RAG: indicizzo il vault…");
+          this.indexer.maxCpuPercent = this.settings.maxCpuPercent;
+          this.indexer.embedBatchSize = this.settings.embedBatchSize;
+          await this.indexer.reindexAll(false, this.onIndexProgress);
+        } else {
+          new Notice("RAG: modello pronto. Premi «Reindicizza» per creare l'indice.", 6000);
+        }
       }
       ragLog.info(`pronto · ${this.store.count()} chunk indicizzati`);
       new Notice(`RAG pronto · ${this.store.count()} chunk`);

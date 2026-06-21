@@ -98,9 +98,10 @@ export class Indexer {
     }
     this.dirty = false;
     try {
-      // BUG FIX: senza init lo store Orama (db) è null → gli insert sono no-op e serialize crasha.
-      // Inizializza su reindex forzato o se lo store non è pronto (indice fresco, tryLoad fallito).
-      if (force || !this.store.ready) {
+      // Inizializza lo store Orama se: reindex forzato, store non pronto (indice fresco), oppure
+      // la dimensione è cambiata (cambio modello, es. 768→384) — altrimenti si inseriscono vettori
+      // di dim diversa nello schema vecchio → "declared as N-dimensional but got M".
+      if (force || !this.store.ready || this.store.dimension !== this.embedder.dim) {
         await this.store.init(this.embedder.dim);
         this.hashes = {};
       }
