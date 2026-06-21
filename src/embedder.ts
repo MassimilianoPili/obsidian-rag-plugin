@@ -126,15 +126,22 @@ export class Embedder {
     });
     this.readyPromise = new Promise<void>((resolve, reject) => {
       this.readyResolve = resolve;
+      // Rifiuta la ready-promise E tutte le richieste pendenti: così un crash (anche a metà
+      // operazione, o `node` assente → ENOENT) NON lascia appese le promise → scatta il fallback.
+      const failAll = (err: Error) => {
+        reject(err);
+        for (const p of this.pending.values()) p.reject(err);
+        this.pending.clear();
+      };
       this.proc.on("error", (e: any) =>
-        reject(new Error(`spawn «${this.nodePath}» fallito (${e?.message || e}) — Node nel PATH?`)),
+        failAll(new Error(`spawn «${this.nodePath}» fallito (${e?.message || e}) — Node nel PATH?`)),
       );
       this.proc.on("exit", (c: any) => {
-        if (this.proc) ragLog.warn(`embedder: servizio uscito (code ${c})`);
         this.proc = null;
         this.readyPromise = null;
+        failAll(new Error(`servizio uscito (code ${c})`));
       });
-      // se non è pronto entro 10s, errore
+      // se non è pronto entro 10s, errore (→ fallback)
       setTimeout(() => reject(new Error("servizio: timeout avvio (10s)")), 10000);
     });
     this.proc.stdout.on("data", (d: any) => this.onServiceData(String(d)));

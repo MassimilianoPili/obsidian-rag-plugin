@@ -41,7 +41,7 @@ export const DEFAULT_SETTINGS: RagSettings = {
   embedServiceScript: "",
   topK: 6,
   graphBoost: 1.12,
-  enableServer: false, // opt-in: server REST locale per Claude/CLI
+  enableServer: true, // default ON: server REST locale per Claude/CLI (loopback, Bearer auto)
   serverPort: 8765,
   serverApiKey: "",
 };
