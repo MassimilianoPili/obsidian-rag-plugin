@@ -100,7 +100,7 @@ export default class ObsidianRagPlugin extends Plugin {
     try {
       const short = this.settings.embedModel.split("/").pop();
       new Notice(`RAG: carico «${short}» (download dal CDN al primo uso)…`, 6000);
-      await this.embedder.load(this.settings.embedModel);
+      await this.embedder.load(this.settings.embedModel, this.onModelProgress);
       const loaded = await this.indexer.tryLoad(this.embedder.model, this.embedder.dim);
       if (!loaded) {
         new Notice("RAG: indicizzo il vault…");
@@ -133,6 +133,22 @@ export default class ObsidianRagPlugin extends Plugin {
     }
   }
 
+  // Progresso download modello → Log (throttled a step del 10% per file, così non spamma).
+  private lastPct: Record<string, number> = {};
+  onModelProgress = (p: any) => {
+    if (!p) return;
+    if (p.status === "progress" && p.file) {
+      const pct = Math.floor(p.progress ?? 0);
+      const bucket = Math.floor(pct / 10) * 10;
+      if ((this.lastPct[p.file] ?? -1) < bucket) {
+        this.lastPct[p.file] = bucket;
+        ragLog.info(`download ${p.file}: ${pct}%`);
+      }
+    } else if (p.status === "done" && p.file) {
+      ragLog.info(`scaricato ${p.file}`);
+    }
+  };
+
   /** Verifica rapida del modello selezionato: lo carica se serve ed esegue un embedding di prova (no reindex). */
   async testModel() {
     if (this.embedder.loading) {
@@ -143,7 +159,7 @@ export default class ObsidianRagPlugin extends Plugin {
     try {
       if (!this.embedder.ready || this.embedder.model !== this.settings.embedModel) {
         new Notice(`RAG test: carico «${short}» (download al primo uso)…`, 6000);
-        await this.embedder.load(this.settings.embedModel);
+        await this.embedder.load(this.settings.embedModel, this.onModelProgress);
       }
       const t0 = performance.now();
       const vec = await this.embedder.embedQuery("prova di funzionamento del modello");

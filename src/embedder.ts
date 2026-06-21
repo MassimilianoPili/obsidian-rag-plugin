@@ -31,7 +31,18 @@ export class Embedder {
       // argomento. Serve solo a evitare che esbuild trasformi import() in require() (rompendo
       // l'import da URL). Nessun input non fidato entra qui → nessun rischio di code injection.
       const dynImport = new Function("u", "return import(u)") as (u: string) => Promise<any>;
-      const mod: any = await dynImport(TRANSFORMERS_CDN);
+      // In Electron (renderer) esiste `process`, quindi transformers rileva ambiente NODE e sceglie
+      // il backend onnxruntime-node (assente) → "InferenceSession.create of undefined". Mascheriamo
+      // process.release SOLO durante l'import, così sceglie il backend WEB/WASM; poi lo ripristiniamo.
+      const proc: any = (globalThis as any).process;
+      const savedRelease = proc?.release;
+      let mod: any;
+      try {
+        if (proc) proc.release = undefined;
+        mod = await dynImport(TRANSFORMERS_CDN);
+      } finally {
+        if (proc) proc.release = savedRelease;
+      }
       const lib: any = typeof mod?.pipeline === "function" ? mod : mod?.default;
       if (!lib || typeof lib.pipeline !== "function") {
         throw new Error("transformers.js: pipeline() non disponibile dopo l'import dal CDN");
