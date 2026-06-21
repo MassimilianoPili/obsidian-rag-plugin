@@ -47,7 +47,10 @@ const workerOpts = {
   assetNames: "[name]", // nome stabile (no hash) per ritrovarlo
   logLevel: "info",
   sourcemap: false,
-  treeShaking: true,
+  // IMPORTANTE: niente tree-shaking. onnxruntime-web registra il backend WASM via side-effect
+  // import; con sideEffects:false esbuild la scarterebbe → "no available backend"/InferenceSession
+  // undefined nel worker. Tenendo tutto, la registrazione del backend sopravvive.
+  treeShaking: false,
   outfile: "worker.js",
   minify: prod,
 };
