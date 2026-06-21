@@ -5,32 +5,43 @@
 
 export const RAG_PROMPT = `# RAG locale — Knowledge Base "Diritti Civili (DC)"
 
-Hai accesso a una Knowledge Base tecnica/funzionale indicizzata con ricerca IBRIDA
-(BM25 lessicale + vettoriale semantica + boost dal grafo dei wikilink), esposta dal
-plugin Obsidian su 127.0.0.1. Strumenti:
+Hai accesso a una Knowledge Base tecnica/funzionale con ricerca IBRIDA (BM25 lessicale +
+embedding E5 + boost dal grafo dei wikilink, fusione RRF, MMR per diversità), esposta dal
+plugin Obsidian su 127.0.0.1.
 
-TOOL (REST, header Authorization: Bearer <API key> tranne /health)
-- GET  /search?q=<query>&k=<N>            → top-N estratti: {sourceFile, headerPath, content, score}
-- POST /v1/chat/completions {messages:[…]} → estratti citati formattati (OpenAI-compatible)
-- GET  /health                            → {model, chunks, ready}
-(Equivalenti CLI: rag search "<q>" -k N | rag ask "<q>" | rag health)
+TOOL (REST, Bearer <API key> tranne /health,/prompt,/tools · equivalenti CLI tra parentesi)
+- GET  /search?q=<query>&k=<N>             → top-N estratti {sourceFile, headerPath, content, score}   (rag search "<q>" -k N)
+- POST /v1/chat/completions {messages:[…]} → estratti citati formattati                                 (rag ask "<q>")
+- GET  /health                             → {model, chunks, ready}                                      (rag health)
 
-COME INTERROGARE BENE
-1. Query in italiano, in linguaggio naturale e SPECIFICHE. I prefissi del modello
-   (query:/passage:) sono gestiti internamente: non aggiungerli.
-2. Usa i TERMINI DI DOMINIO e i loro alias: le entità sono indicizzate coi sinonimi
-   (es. "VI" = verifica inadempienza; "OP" = ordine di pagamento; "ODA" = ordinanza di
-   assegnazione). Acronimo o nome esteso funzionano ugualmente.
-3. Calibra k: domande ampie/esplorative → k 8..12; fatti puntuali → k 3..5.
-4. Se la prima query non basta, RIFORMULA con sinonimi o scomponila in sotto-domande
-   (multi-query) invece di insistere con le stesse parole.
-5. I risultati citano "file · sezione": cita la fonte e rispetta i campi di provenance
-   inline ^[source:: …] ^[confidence:: …] se presenti. NON inventare: se gli estratti
-   non coprono la domanda, raffina la ricerca o dichiara l'incertezza.
+FORMULARE LA QUERY (BM25+denso ⇒ complementari)
+- Scrivi FRASI in linguaggio naturale, in italiano, < ~30 parole. NON keyword telegrafiche
+  e non paragrafi (diluiscono l'embedding). [E5; MTEB]
+- Concetti astratti → domanda naturale (il denso eccelle). Entità precise (nomi classe,
+  codici, sigle) → mettile LETTERALMENTE: il BM25 serve per il match esatto. [BEIR; entity-questions]
+- Acronimi: includi sigla + forma estesa tra parentesi, es. "VI (verifica inadempienza)".
+  Le entità della KB hanno alias indicizzati (VI, OP, ODA…): sigla o nome esteso vanno entrambi. [BM25/F&T]
 
-WORKFLOW CONSIGLIATO
-  prima /search per individuare le note rilevanti → poi /v1 (o /search con k più alto)
-  sulle note/sezioni emerse per estrarre il dettaglio da citare.`;
+QUANTI RISULTATI
+- k default 6; ampie/esplorative → k 10..12; fatti puntuali → k 3..5.
+- Per COMPORRE la risposta usa solo i TOP 3-5 chunk più pertinenti, non tutti: troppo
+  contesto degrada la risposta ("lost in the middle"). [Liu 2023]
+
+SE I RISULTATI SONO POVERI (max 3 tentativi, poi astieniti)
+- Riformula (keyword↔frase, sinonimi). Multi-query (2-3 riformulazioni, unisci+dedup) se
+  <3 risultati o terminologia variabile. [Ma 2023]
+- Domanda multi-hop → SCOMPONILA in sotto-domande, cerca ciascuna, poi sintetizza. [self-ask]
+- HyDE (documento ipotetico) SOLO per query astratte senza ancore precise; mai su query
+  fattuali con entità. [Gao HyDE]
+
+GROUNDING (anti-allucinazione) [ALCE; Self-RAG]
+- CITA la fonte per ogni affermazione: "file · sezione" o [[Nome Nota]]. Rispetta i campi
+  di provenance inline ^[source:: …] ^[confidence:: …] se presenti.
+- NON inventare: se gli estratti non coprono la domanda, dichiaralo. Distingui TROVATO-in-KB
+  da INFERENZA da conoscenza GENERALE. Se due chunk si contraddicono, riporta entrambi con fonte.
+
+WORKFLOW: prima /search per trovare le note → poi /ask (o /search con k più alto) sulle
+sezioni emerse per estrarre il dettaglio da citare.`;
 
 export interface RagTool {
   name: string;
