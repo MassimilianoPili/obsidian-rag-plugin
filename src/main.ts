@@ -51,6 +51,8 @@ export default class ObsidianRagPlugin extends Plugin {
   async onload() {
     await this.loadSettings();
     this.indexer = new Indexer(this.app, this, this.store, this.embedder);
+    // URL locale (app://) del worker bundlato: stesso origine → niente CORS, backend WASM ok.
+    this.embedder.workerUrl = this.app.vault.adapter.getResourcePath(`${this.manifest.dir}/worker.js`);
 
     this.registerView(VIEW_TYPE_RAG, (leaf) => new RagView(leaf, this));
     this.addRibbonIcon("search", "Obsidian RAG", () => this.activateView());

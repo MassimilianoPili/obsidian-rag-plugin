@@ -3,32 +3,26 @@ import process from "process";
 
 const prod = process.argv[2] === "production";
 
-// Obsidian fornisce questi a runtime: vanno esternalizzati, non bundlati.
-const external = [
+// Obsidian fornisce questi a runtime: vanno esternalizzati nel bundle principale.
+const externalMain = [
   "obsidian", "electron",
   "@codemirror/autocomplete", "@codemirror/collab", "@codemirror/commands",
   "@codemirror/language", "@codemirror/lint", "@codemirror/search",
   "@codemirror/state", "@codemirror/view",
   "@lezer/common", "@lezer/highlight", "@lezer/lr",
   "node:fs", "node:path", "node:os", "node:crypto",
-  "sharp", // usato solo dalle pipeline immagini, non serve per il text embedding
-  // transformers.js NON va bundlato: esbuild lo lascia a metà init (env undefined, pipeline rotta).
-  // Lo importiamo a runtime dal CDN (vedi embedder.ts).
+  "sharp",
+  // main NON importa transformers: l'embedding vive nel worker (worker.js).
   "@xenova/transformers",
 ];
 
-// transformers.js importa STATICAMENTE onnxruntime-node: in Obsidian (Electron) non esiste
-// il binario nativo, e l'auto-detect sceglie comunque il backend "node". Aliasandolo a
-// onnxruntime-web, entrambi i percorsi usano il WASM cross-platform.
-const alias = { "onnxruntime-node": "onnxruntime-web" };
-
-const opts = {
+// Bundle PRINCIPALE: plugin Obsidian (CJS, platform node).
+const mainOpts = {
   entryPoints: ["src/main.ts"],
   bundle: true,
-  external,
-  alias,
+  external: externalMain,
   format: "cjs",
-  target: "es2020", // transformers.js usa BigInt literals (richiede >= es2020)
+  target: "es2020",
   platform: "node",
   logLevel: "info",
   sourcemap: prod ? false : "inline",
@@ -37,10 +31,31 @@ const opts = {
   minify: prod,
 };
 
+// Bundle WORKER: transformers.js + onnxruntime-web bundlati per il BROWSER (platform browser),
+// così nel Web Worker l'ambiente è rilevato come browser e il backend WASM si registra
+// correttamente (niente "process node" → niente InferenceSession undefined). I .wasm si
+// scaricano a runtime da wasmPaths (CDN). Servito in locale (stesso origine) → niente CORS.
+const workerOpts = {
+  entryPoints: ["src/worker.ts"],
+  bundle: true,
+  format: "esm",
+  target: "es2020",
+  platform: "browser",
+  alias: { "onnxruntime-node": "onnxruntime-web" }, // transformers importa node: aliasiamo a web
+  logLevel: "info",
+  sourcemap: false,
+  treeShaking: true,
+  outfile: "worker.js",
+  minify: prod,
+};
+
 if (prod) {
-  await esbuild.build(opts);
+  await esbuild.build(mainOpts);
+  await esbuild.build(workerOpts);
 } else {
-  const ctx = await esbuild.context(opts);
-  await ctx.watch();
-  console.log("watching...");
+  const c1 = await esbuild.context(mainOpts);
+  const c2 = await esbuild.context(workerOpts);
+  await c1.watch();
+  await c2.watch();
+  console.log("watching main.js + worker.js…");
 }
