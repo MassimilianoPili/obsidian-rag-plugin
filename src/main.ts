@@ -32,7 +32,7 @@ export const DEFAULT_SETTINGS: RagSettings = {
   embedModel: "Xenova/multilingual-e5-small", // pre-selezionato nella tendina, NON scaricato finché non confermi
   modelConfirmed: false,
   autoLoadOnStartup: false, // default: nessun caricamento all'avvio → apertura Obsidian leggera
-  maxCpuPercent: 50, // limite CPU approssimato durante l'indicizzazione (duty-cycle)
+  maxCpuPercent: 5, // default molto prudente: indicizzazione lenta ma UI fluidissima (duty-cycle)
   embedBatchSize: 8, // chunk per batch → duty-cycle anche dentro i file grandi
   topK: 6,
   graphBoost: 1.12,
@@ -366,10 +366,20 @@ class RagSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Limite CPU indicizzazione (%)")
-      .setDesc("Quota di CPU usata per l'embedding (duty-cycle): 50 = lavora ~metà del tempo e dorme l'altra metà → UI più fluida ma indicizzazione più lenta. 100 = nessun limite.")
+      .setDesc("Quota di CPU per l'embedding (duty-cycle): 5 (default) = lavora ~1/20 del tempo → UI fluidissima ma indicizzazione lenta. 100 = nessun limite, massima velocità.")
       .addText((t) =>
         t.setValue(String(this.plugin.settings.maxCpuPercent)).onChange(async (v) => {
-          this.plugin.settings.maxCpuPercent = Math.min(100, Math.max(5, Number(v) || 50));
+          this.plugin.settings.maxCpuPercent = Math.min(100, Math.max(5, Number(v) || 5));
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Batch embedding (chunk)")
+      .setDesc("Quanti chunk embeddare per volta tra una pausa e l'altra. Più piccolo = pause più frequenti = UI più fluida. Default 8.")
+      .addText((t) =>
+        t.setValue(String(this.plugin.settings.embedBatchSize)).onChange(async (v) => {
+          this.plugin.settings.embedBatchSize = Math.max(1, Number(v) || 8);
           await this.plugin.saveSettings();
         }),
       );
